@@ -1,22 +1,43 @@
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+import OpenAI from "openai";
 
-  // OPTIONS（プリフライト）はそのまま許可
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
+export default async function handler(req, res) {
+  // GET 専用に変更（Glide の Open Link で使える）
+  if (req.method !== "GET") {
+    return res.status(405).json({ error: "Only GET allowed" });
   }
 
-  // ★ GET の場合、クエリから取得
-  const email = req.query.user_email || "no-email";
-  const company = req.query.company || "no-company";
+  try {
+    const client = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
 
-  // ここで実際の AI 処理（例として JSON を返す）
-  return res.status(200).json({
-    message: "OK",
-    received_email: email,
-    received_company: company,
-  });
+    // URL パラメータを取得
+    const user_email = req.query.user_email || "";
+    const company = req.query.company || "";
+
+    const prompt = `
+あなたは価格算出AIです。
+以下のユーザー情報を元に BUY PRICE（仕入れ）と SELL PRICE（販売価格）を計算してください。
+
+【ユーザー情報】
+メール：${user_email}
+会社名：${company}
+
+出力は以下の形式：
+BUY_PRICE: xxxx
+SELL_PRICE: xxxx
+    `;
+
+    const completion = await client.responses.create({
+      model: "gpt-4o-mini",
+      input: prompt,
+    });
+
+    const text = completion.output_text || "No result";
+
+    return res.status(200).json({ result: text });
+  } catch (error) {
+    console.error("API Error:", error);
+    return res.status(500).json({ error: error.message });
+  }
 }
-
