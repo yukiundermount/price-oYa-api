@@ -33,7 +33,20 @@ export default async function handler(req, res) {
       messages: [
         {
           role: "system",
-          content: "あなたは中古品のプロ鑑定士です。必ずJSONのみで回答してください。"
+          content: `
+You are a professional second-hand goods appraiser.
+Return ONLY valid JSON.
+Do NOT use code blocks.
+Do NOT add explanations outside JSON.
+Use ONLY the following keys in English:
+
+{
+  "buy_price": 0,
+  "sell_price": 0,
+  "profit_rate": 0,
+  "reason": ""
+}
+`
         },
         {
           role: "user",
