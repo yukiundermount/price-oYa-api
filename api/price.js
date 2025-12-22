@@ -3,60 +3,87 @@ import OpenAI from "openai";
 export default async function handler(req, res) {
   // POST 以外は拒否
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Only POST allowed" });
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+    // ① 環境変数チェック
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({
+        error: "OPENAI_API_KEY is not set"
+      });
+    }
+
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
     });
 
-    const {
-      user_email,
-      company,
-      description,
-      image1,
-      image2,
-      image3,
-      category,
-      target_profit,
-    } = req.body;
+    // ② GAS から受け取る prompt
+    const { prompt } = req.body;
 
-    const prompt = `
-あなたはプロの鑑定士です。
-以下の商品情報から BUY PRICE（仕入れ値）と SELL PRICE（販売価格）を計算してください。
+    if (!prompt) {
+      return res.status(400).json({
+        error: "prompt is required"
+      });
+    }
 
-【商品情報】
-説明：${description}
-画像1：${image1}
-画像2：${image2}
-画像3：${image3}
-カテゴリ：${category}
-希望利益率：${target_profit}%
-
-出力は必ず以下のJSON形式で返してください：
-{
-  "buy_price": 数値,
-  "sell_price": 数値,
-  "comment": "短いコメント"
-}
-`;
-
-    const completion = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: prompt,
-      max_output_tokens: 400,
+    // ③ OpenAI 呼び出し
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "あなたは中古品のプロ鑑定士です。必ずJSONのみで回答してください。"
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: 0.3
     });
 
-    const aiText = completion.output_text;
+    const rawText = completion.choices[0].message.content;
 
+    // ④ JSON パース（失敗したらエラー）
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(500).json({
+        error: "AI response is not valid JSON",
+        raw: rawText
+      });
+    }
+
+    // ⑤ 必須キー確認
+    const requiredKeys = [
+      "buy_price",
+      "sell_price",
+      "profit_rate",
+      "reason"
+    ];
+
+    for (const key of requiredKeys) {
+      if (!(key in parsed)) {
+        return res.status(500).json({
+          error: `Missing key in AI response: ${key}`,
+          parsed
+        });
+      }
+    }
+
+    // ⑥ 正常レスポンス
     return res.status(200).json({
-      result: aiText,
+      buy_price: Number(parsed.buy_price),
+      sell_price: Number(parsed.sell_price),
+      profit_rate: Number(parsed.profit_rate),
+      reason: parsed.reason
     });
-  } catch (error) {
-    console.error("API Error:", error);
+
+  } catch (err) {
     return res.status(500).json({
-      error: error.message,
+      error: err.message
     });
   }
 }
