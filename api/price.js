@@ -1,33 +1,26 @@
 import OpenAI from "openai";
 
 export default async function handler(req, res) {
-  // POST 以外は拒否
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    // ① 環境変数チェック
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         error: "OPENAI_API_KEY is not set"
       });
     }
 
+    const { prompt } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: "prompt is required" });
+    }
+
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY
     });
 
-    // ② GAS から受け取る prompt
-    const { prompt } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({
-        error: "prompt is required"
-      });
-    }
-
-    // ③ OpenAI 呼び出し
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -37,7 +30,6 @@ export default async function handler(req, res) {
 You are a professional second-hand goods appraiser.
 Return ONLY valid JSON.
 Do NOT use code blocks.
-Do NOT add explanations outside JSON.
 Use ONLY the following keys in English:
 
 {
@@ -58,40 +50,49 @@ Use ONLY the following keys in English:
 
     const rawText = completion.choices[0].message.content;
 
-    // ④ JSON パース（失敗したらエラー）
-    let parsed;
+    let ai;
     try {
-      parsed = JSON.parse(rawText);
-    } catch (e) {
+      ai = JSON.parse(rawText);
+    } catch {
       return res.status(500).json({
         error: "AI response is not valid JSON",
         raw: rawText
       });
     }
 
-    // ⑤ 必須キー確認
-    const requiredKeys = [
-      "buy_price",
-      "sell_price",
-      "profit_rate",
-      "reason"
-    ];
+    // ==========
+    // 🔒 数値ガード
+    // ==========
 
-    for (const key of requiredKeys) {
-      if (!(key in parsed)) {
-        return res.status(500).json({
-          error: `Missing key in AI response: ${key}`,
-          parsed
-        });
-      }
+    let buy = Number(ai.buy_price);
+    let sell = Number(ai.sell_price);
+
+    if (isNaN(buy) || buy < 0) {
+      buy = 0;
     }
 
-    // ⑥ 正常レスポンス
+    if (isNaN(sell) || sell < buy) {
+      sell = buy;
+    }
+
+    // 利益率は必ずサーバーで再計算
+    const profitRate =
+      buy === 0 ? 0 : Math.round(((sell - buy) / buy) * 100);
+
+    // reason に補正ログを残す
+    let reason = ai.reason || "";
+    if (ai.buy_price < 0) {
+      reason += " (buy_price was corrected to 0)";
+    }
+    if (ai.sell_price < ai.buy_price) {
+      reason += " (sell_price was corrected)";
+    }
+
     return res.status(200).json({
-      buy_price: Number(parsed.buy_price),
-      sell_price: Number(parsed.sell_price),
-      profit_rate: Number(parsed.profit_rate),
-      reason: parsed.reason
+      buy_price: buy,
+      sell_price: sell,
+      profit_rate: profitRate,
+      reason
     });
 
   } catch (err) {
