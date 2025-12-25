@@ -1,46 +1,37 @@
-import OpenAI from "openai";
-
 export default async function handler(req, res) {
-
-  // ✅ CORS 対応（最初に書く）
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // ✅ OPTIONS は即OKで返す
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // POST 以外は拒否
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
+  const {
+    brand,
+    model,
+    condition,
+    year,
+    accessories,
+    strategy
+  } = req.body;
 
-  try {
-    const {
-      brand,
-      model,
-      condition,
-      year,
-      accessories,
-      strategy
-    } = req.body;
+  // 仮ロジック（後でAIに差し替え可）
+  const buyPrice = 850000;
+  const sellPrice = 1050000;
+  const profitRate = Math.round(((sellPrice - buyPrice) / sellPrice) * 100);
 
-    if (!brand || !model || !condition) {
-      return res.status(400).json({ error: "required fields missing" });
-    }
+  const reason = `
+${brand} ${model} は現在も国内外で需要が非常に高いモデルです。
+特に ${year} 年製・${condition}・${accessories} 付きの個体は流通量が限られており、
+価格の下落リスクが低いと判断できます。
 
-    // --- ここに OpenAI 処理 ---
-    res.status(200).json({
-      buy_price: 850000,
-      sell_price: 1050000,
-      profit_rate: "23%",
-      ai_reason: "ロレックス デイトナは市場需要が非常に高く…"
-    });
+販売戦略として「${strategy}」を選択しているため、
+短期回転と利益率のバランスを考慮し、
+推奨販売価格を ${sellPrice.toLocaleString()} 円としました。
+`.trim();
 
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  return res.status(200).json({
+    buyPrice,
+    sellPrice,
+    profitRate,
+    reason
+  });
 }
 
