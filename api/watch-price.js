@@ -1,12 +1,16 @@
-export default async function handler(req, res) {
+import OpenAI from "openai";
 
-  /* =========================
-     CORS / OPTIONS 対応
-  ========================= */
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export default async function handler(req, res) {
+  // CORS対応（STUDIO iframe 対策）
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
+  // Preflight
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -25,37 +29,62 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    /* =========================
-       簡易ロジック（仮）
-       ※ 後でAIに置換可能
-    ========================= */
-    const buyPrice = 850000;
-    const sellPrice = 1050000;
-    const profitRate = Math.round(
-      ((sellPrice - buyPrice) / sellPrice) * 100
-    );
+    // プロンプト（腕時計AI査定）
+    const prompt = `
+あなたは中古ブランド腕時計のプロ査定AIです。
 
-    const reason = `
-${brand} ${model} は国内中古市場において安定した需要があり、
-特に ${year} 年製・状態「${condition}」・付属品「${accessories}」付き個体は
-流通数が限られ、価格下落リスクが低いモデルと判断できます。
+以下の商品情報をもとに、
+・想定仕入価格（buyPrice）
+・推奨販売価格（sellPrice）
+・利益率（profitRate, %）
+・判断理由（reason,日本語で詳しく）
 
-販売戦略として「${strategy}」を選択しているため、
-短期回転と利益率のバランスを重視し、
-推奨販売価格を ${sellPrice.toLocaleString()} 円としました。
-`.trim();
+を必ず「JSON形式のみ」で出力してください。
 
-    return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason,
+【商品情報】
+カテゴリ: 腕時計
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+製造年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+【出力形式】
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "reason": string
+}
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "あなたは中古腕時計の価格査定AIです。" },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.4,
     });
 
-  } catch (err) {
+    const text = completion.choices[0].message.content;
+
+    // JSONとして安全にパース
+    const result = JSON.parse(text);
+
+    return res.status(200).json({
+      buyPrice: result.buyPrice,
+      sellPrice: result.sellPrice,
+      profitRate: result.profitRate,
+      reason: result.reason,
+    });
+
+  } catch (error) {
+    console.error("AI査定エラー:", error);
     return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message,
+      error: "AI査定に失敗しました",
+      detail: error.message,
     });
   }
 }
