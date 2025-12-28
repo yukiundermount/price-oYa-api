@@ -5,22 +5,13 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
-  // CORS対応（STUDIO iframe 対策）
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  // Preflight
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const {
+      category,   // watch | bag | sneaker
       brand,
       model,
       condition,
@@ -29,20 +20,19 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    // プロンプト（腕時計AI査定）
-    const prompt = `
-あなたは中古ブランド腕時計のプロ査定AIです。
+    /* ===============================
+       カテゴリ別プロンプト
+    =============================== */
 
-以下の商品情報をもとに、
-・想定仕入価格（buyPrice）
-・推奨販売価格（sellPrice）
-・利益率（profitRate, %）
-・判断理由（reason,日本語で詳しく）
+    let systemPrompt = "";
+    let userPrompt = "";
 
-を必ず「JSON形式のみ」で出力してください。
+    if (category === "watch") {
+      systemPrompt = "あなたは高級腕時計専門の中古査定AIです。";
 
-【商品情報】
-カテゴリ: 腕時計
+      userPrompt = `
+以下の腕時計を査定してください。
+
 ブランド: ${brand}
 モデル: ${model}
 状態: ${condition}
@@ -50,28 +40,86 @@ export default async function handler(req, res) {
 付属品: ${accessories}
 販売戦略: ${strategy}
 
-【出力形式】
-{
-  "buyPrice": number,
-  "sellPrice": number,
-  "profitRate": number,
-  "reason": string
-}
+日本国内中古市場を前提に、
+・想定仕入価格
+・推奨販売価格
+・利益率（%）
+・判断理由（日本語・詳細）
+
+を必ずJSON形式のみで出力してください。
 `;
+    }
+
+    if (category === "bag") {
+      systemPrompt = "あなたはブランドバッグ専門のリセール査定AIです。";
+
+      userPrompt = `
+以下のブランドバッグを査定してください。
+
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+購入時期: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+日本の中古ブランドバッグ市場を前提に、
+・想定仕入価格
+・推奨販売価格
+・利益率（%）
+・判断理由（日本語・詳細）
+
+を必ずJSON形式のみで出力してください。
+`;
+    }
+
+    if (category === "sneaker") {
+      systemPrompt = "あなたはスニーカー二次流通市場に精通した査定AIです。";
+
+      userPrompt = `
+以下のスニーカーを査定してください。
+
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+発売年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+StockX・SNKRDUNK等の相場感を考慮し、
+・想定仕入価格
+・推奨販売価格
+・利益率（%）
+・判断理由（日本語・詳細）
+
+を必ずJSON形式のみで出力してください。
+`;
+    }
+
+    /* ===============================
+       OpenAI 呼び出し
+    =============================== */
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "あなたは中古腕時計の価格査定AIです。" },
-        { role: "user", content: prompt },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
       ],
       temperature: 0.4,
     });
 
     const text = completion.choices[0].message.content;
 
-    // JSONとして安全にパース
-    const result = JSON.parse(text);
+    /* ===============================
+       JSON安全パース
+    =============================== */
+
+    const jsonStart = text.indexOf("{");
+    const jsonEnd = text.lastIndexOf("}") + 1;
+    const jsonString = text.slice(jsonStart, jsonEnd);
+
+    const result = JSON.parse(jsonString);
 
     return res.status(200).json({
       buyPrice: result.buyPrice,
@@ -81,7 +129,7 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error("AI査定エラー:", error);
+    console.error(error);
     return res.status(500).json({
       error: "AI査定に失敗しました",
       detail: error.message,
