@@ -6,7 +6,7 @@ const openai = new OpenAI({
 
 export default async function handler(req, res) {
   /* =========================
-     CORS（Glide新UI必須）
+     CORS（Glide / STUDIO 必須）
   ========================= */
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -22,26 +22,22 @@ export default async function handler(req, res) {
 
   try {
     const {
-      category,
+      category,   // STUDIO: 腕時計 / バッグ / スニーカー
       brand,
       model,
       condition,
       year,
       accessories,
-      strategy,
+      strategy,   // 早く売りたい / バランス / 高値で売りたい
     } = req.body;
 
     /* =========================
-       カテゴリ別システムプロンプト
+       カテゴリ別プロンプト
     ========================= */
     const systemPromptMap = {
       "腕時計": "あなたは高級腕時計専門の中古相場査定AIです。",
       "バッグ": "あなたは高級ブランドバッグ専門の中古相場査定AIです。",
-      "トレーディングカード": "あなたはトレーディングカード専門の市場価格査定AIです。",
-      "スニーカー": "あなたは限定・人気スニーカー専門の中古相場査定AIです。",
-      "デニム": "あなたはヴィンテージ・ブランドデニム専門の査定AIです。",
-      "その他衣類": "あなたはブランド衣類全般の中古相場査定AIです。",
-      "その他": "あなたは中古商品の市場価格を推定するAIです。",
+      "スニーカー": "あなたは人気・限定スニーカー専門の中古相場査定AIです。",
     };
 
     const systemPrompt =
@@ -49,7 +45,7 @@ export default async function handler(req, res) {
       "あなたは中古商品の市場価格を推定するAIです。";
 
     const userPrompt = `
-以下の商品について「現在の市場想定販売価格（円）」を1つだけ数値で推定してください。
+以下の商品について「現在の標準的な市場販売相場（円）」を推定してください。
 
 カテゴリ：${category}
 ブランド：${brand}
@@ -57,9 +53,8 @@ export default async function handler(req, res) {
 状態：${condition}
 年式：${year}
 付属品：${accessories}
-販売戦略：${strategy}
 
-必ず次の JSON 形式でのみ返してください。
+必ず次の JSON 形式で返してください。
 {
   "marketPrice": number,
   "reason": string
@@ -79,41 +74,33 @@ export default async function handler(req, res) {
     });
 
     const text = completion.choices[0].message.content;
+    const aiResult = JSON.parse(text);
 
-    let aiResult;
-    try {
-      aiResult = JSON.parse(text);
-    } catch {
-      return res.status(500).json({
-        error: "AI response parse error",
-        raw: text,
-      });
+    const baseMarketPrice = Number(aiResult.marketPrice);
+    if (!baseMarketPrice || isNaN(baseMarketPrice)) {
+      return res.status(500).json({ error: "Invalid market price" });
     }
 
     /* =========================
-       価格計算（NaN防止）
+       戦略別 売値調整
     ========================= */
-    const marketPrice = Number(aiResult.marketPrice);
-
-    if (!marketPrice || isNaN(marketPrice)) {
-      return res.status(500).json({
-        error: "Invalid market price from AI",
-        raw: aiResult,
-      });
-    }
+    const sellMultiplier =
+      strategy === "早く売りたい" ? 0.95 :
+      strategy === "高値で売りたい" ? 1.10 :
+      1.0;
 
     const profitRate =
       strategy === "早く売りたい" ? 10 :
-      strategy === "バランスよく売りたい" ? 15 :
-      20;
+      strategy === "高値で売りたい" ? 20 :
+      15;
 
-    const sellPrice = Math.round(marketPrice);
+    const sellPrice = Math.round(baseMarketPrice * sellMultiplier);
     const buyPrice = Math.round(
       sellPrice * (1 - profitRate / 100)
     );
 
     /* =========================
-       Glide に返却
+       レスポンス
     ========================= */
     return res.status(200).json({
       buyPrice,
