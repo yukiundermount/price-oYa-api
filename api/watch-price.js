@@ -5,29 +5,17 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
-  /**
-   * =========================
-   * CORS（Glide 新UI 必須）
-   * =========================
-   */
+  /* =========================
+     CORS（Glide新UI必須）
+  ========================= */
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  /**
-   * =========================
-   * OPTIONS（プリフライト）
-   * =========================
-   */
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  /**
-   * =========================
-   * POST 以外は拒否
-   * =========================
-   */
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -43,46 +31,44 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    /**
-     * =========================
-     * カテゴリ別プロンプト
-     * =========================
-     */
-    let systemPrompt = "";
-    let userPrompt = "";
+    /* =========================
+       カテゴリ別システムプロンプト
+    ========================= */
+    const systemPromptMap = {
+      "腕時計": "あなたは高級腕時計専門の中古相場査定AIです。",
+      "バッグ": "あなたは高級ブランドバッグ専門の中古相場査定AIです。",
+      "トレーディングカード": "あなたはトレーディングカード専門の市場価格査定AIです。",
+      "スニーカー": "あなたは限定・人気スニーカー専門の中古相場査定AIです。",
+      "デニム": "あなたはヴィンテージ・ブランドデニム専門の査定AIです。",
+      "その他衣類": "あなたはブランド衣類全般の中古相場査定AIです。",
+      "その他": "あなたは中古商品の市場価格を推定するAIです。",
+    };
 
-    if (category === "watch") {
-      systemPrompt =
-        "あなたは高級腕時計専門の中古査定AIです。市場相場と需要を重視してください。";
+    const systemPrompt =
+      systemPromptMap[category] ||
+      "あなたは中古商品の市場価格を推定するAIです。";
 
-      userPrompt = `
-以下の腕時計を査定してください。
+    const userPrompt = `
+以下の商品について「現在の市場想定販売価格（円）」を1つだけ数値で推定してください。
 
+カテゴリ：${category}
 ブランド：${brand}
 モデル：${model}
 状態：${condition}
-製造・購入年：${year}
+年式：${year}
 付属品：${accessories}
 販売戦略：${strategy}
 
-次の JSON 形式でのみ出力してください。
+必ず次の JSON 形式でのみ返してください。
 {
-  "price": number,
-  "profitRate": number,
+  "marketPrice": number,
   "reason": string
 }
 `.trim();
-    } else {
-      return res.status(400).json({
-        error: "Unsupported category",
-      });
-    }
 
-    /**
-     * =========================
-     * OpenAI 呼び出し
-     * =========================
-     */
+    /* =========================
+       OpenAI 呼び出し
+    ========================= */
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.3,
@@ -94,14 +80,9 @@ export default async function handler(req, res) {
 
     const text = completion.choices[0].message.content;
 
-    /**
-     * =========================
-     * JSON パース
-     * =========================
-     */
-    let result;
+    let aiResult;
     try {
-      result = JSON.parse(text);
+      aiResult = JSON.parse(text);
     } catch {
       return res.status(500).json({
         error: "AI response parse error",
@@ -109,24 +90,42 @@ export default async function handler(req, res) {
       });
     }
 
-    /**
-     * =========================
-     * Glide に返却
-     * =========================
-     */
+    /* =========================
+       価格計算（NaN防止）
+    ========================= */
+    const marketPrice = Number(aiResult.marketPrice);
+
+    if (!marketPrice || isNaN(marketPrice)) {
+      return res.status(500).json({
+        error: "Invalid market price from AI",
+        raw: aiResult,
+      });
+    }
+
+    const profitRate =
+      strategy === "早く売りたい" ? 10 :
+      strategy === "バランスよく売りたい" ? 15 :
+      20;
+
+    const sellPrice = Math.round(marketPrice);
+    const buyPrice = Math.round(
+      sellPrice * (1 - profitRate / 100)
+    );
+
+    /* =========================
+       Glide に返却
+    ========================= */
     return res.status(200).json({
-      price: result.price,
-      profitRate: result.profitRate,
-      reason: result.reason,
+      buyPrice,
+      sellPrice,
+      profitRate,
+      reason: aiResult.reason,
     });
+
   } catch (err) {
     console.error("watch-price error:", err);
-
-    return res.status(500).json({
-      error: "Internal server error",
-    });
+    return res.status(500).json({ error: "Internal server error" });
   }
 }
-
 
 
