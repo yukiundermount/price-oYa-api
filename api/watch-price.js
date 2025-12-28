@@ -5,13 +5,36 @@ const openai = new OpenAI({
 });
 
 export default async function handler(req, res) {
+  /**
+   * =========================
+   * CORS（Glide 新UI 必須）
+   * =========================
+   */
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  /**
+   * =========================
+   * OPTIONS（プリフライト）
+   * =========================
+   */
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  /**
+   * =========================
+   * POST 以外は拒否
+   * =========================
+   */
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const {
-      category,   // watch | bag | sneaker
+      category,
       brand,
       model,
       condition,
@@ -20,121 +43,90 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    /* ===============================
-       カテゴリ別プロンプト
-    =============================== */
-
+    /**
+     * =========================
+     * カテゴリ別プロンプト
+     * =========================
+     */
     let systemPrompt = "";
     let userPrompt = "";
 
     if (category === "watch") {
-      systemPrompt = "あなたは高級腕時計専門の中古査定AIです。";
+      systemPrompt =
+        "あなたは高級腕時計専門の中古査定AIです。市場相場と需要を重視してください。";
 
       userPrompt = `
 以下の腕時計を査定してください。
 
-ブランド: ${brand}
-モデル: ${model}
-状態: ${condition}
-製造年: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
+ブランド：${brand}
+モデル：${model}
+状態：${condition}
+製造・購入年：${year}
+付属品：${accessories}
+販売戦略：${strategy}
 
-日本国内中古市場を前提に、
-・想定仕入価格
-・推奨販売価格
-・利益率（%）
-・判断理由（日本語・詳細）
-
-を必ずJSON形式のみで出力してください。
-`;
+次の JSON 形式でのみ出力してください。
+{
+  "price": number,
+  "profitRate": number,
+  "reason": string
+}
+`.trim();
+    } else {
+      return res.status(400).json({
+        error: "Unsupported category",
+      });
     }
 
-    if (category === "bag") {
-      systemPrompt = "あなたはブランドバッグ専門のリセール査定AIです。";
-
-      userPrompt = `
-以下のブランドバッグを査定してください。
-
-ブランド: ${brand}
-モデル: ${model}
-状態: ${condition}
-購入時期: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
-
-日本の中古ブランドバッグ市場を前提に、
-・想定仕入価格
-・推奨販売価格
-・利益率（%）
-・判断理由（日本語・詳細）
-
-を必ずJSON形式のみで出力してください。
-`;
-    }
-
-    if (category === "sneaker") {
-      systemPrompt = "あなたはスニーカー二次流通市場に精通した査定AIです。";
-
-      userPrompt = `
-以下のスニーカーを査定してください。
-
-ブランド: ${brand}
-モデル: ${model}
-状態: ${condition}
-発売年: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
-
-StockX・SNKRDUNK等の相場感を考慮し、
-・想定仕入価格
-・推奨販売価格
-・利益率（%）
-・判断理由（日本語・詳細）
-
-を必ずJSON形式のみで出力してください。
-`;
-    }
-
-    /* ===============================
-       OpenAI 呼び出し
-    =============================== */
-
+    /**
+     * =========================
+     * OpenAI 呼び出し
+     * =========================
+     */
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
+      temperature: 0.3,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      temperature: 0.4,
     });
 
     const text = completion.choices[0].message.content;
 
-    /* ===============================
-       JSON安全パース
-    =============================== */
+    /**
+     * =========================
+     * JSON パース
+     * =========================
+     */
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      return res.status(500).json({
+        error: "AI response parse error",
+        raw: text,
+      });
+    }
 
-    const jsonStart = text.indexOf("{");
-    const jsonEnd = text.lastIndexOf("}") + 1;
-    const jsonString = text.slice(jsonStart, jsonEnd);
-
-    const result = JSON.parse(jsonString);
-
+    /**
+     * =========================
+     * Glide に返却
+     * =========================
+     */
     return res.status(200).json({
-      buyPrice: result.buyPrice,
-      sellPrice: result.sellPrice,
+      price: result.price,
       profitRate: result.profitRate,
       reason: result.reason,
     });
+  } catch (err) {
+    console.error("watch-price error:", err);
 
-  } catch (error) {
-    console.error(error);
     return res.status(500).json({
-      error: "AI査定に失敗しました",
-      detail: error.message,
+      error: "Internal server error",
     });
   }
 }
+
 
 
