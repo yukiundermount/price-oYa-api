@@ -1,131 +1,100 @@
 import OpenAI from "openai";
+import { google } from "googleapis";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 export default async function handler(req, res) {
-  /* =========================
-     CORS（STUDIO / Glide 必須）
-  ========================= */
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const {
-      category,   // ← STUDIO から送られるカテゴリ
+      category,
       brand,
       model,
       condition,
       year,
       accessories,
-      strategy,   // 早く売りたい / バランスよく売りたい / 高値で売りたい
+      strategy,
     } = req.body;
 
-    /* =========================
-       カテゴリ別 AI 役割定義
-    ========================= */
-    const systemPromptMap = {
-      "スニーカー":
-        "あなたは人気・限定スニーカー専門の中古市場価格査定AIです。",
-      "デニム":
-        "あなたはヴィンテージおよびブランドデニム専門の中古査定AIです。",
-      "バッグ":
-        "あなたは高級ブランドバッグ専門の中古市場査定AIです。",
-      "腕時計":
-        "あなたは高級腕時計専門の中古市場査定AIです。",
-      "トレーディングカード":
-        "あなたはトレーディングカード専門の市場価格査定AIです。",
-      "その他衣類":
-        "あなたはブランド衣類全般の中古市場査定AIです。",
-      "その他":
-        "あなたは中古商品の市場価格を推定するAIです。",
-    };
-
-    const systemPrompt =
-      systemPromptMap[category] ||
-      "あなたは中古商品の市場価格を推定するAIです。";
-
-    const userPrompt = `
-以下の商品について「現在の標準的な市場販売相場（円）」を推定してください。
-
-カテゴリ：${category}
-ブランド：${brand}
-モデル・名称：${model}
-状態：${condition}
-年式：${year}
-付属品：${accessories}
-
-必ず次の JSON 形式のみで返してください。
-{
-  "marketPrice": number,
-  "reason": string
-}
-`.trim();
-
-    /* =========================
-       OpenAI 呼び出し
-    ========================= */
+    /* ========= AI 査定 ========= */
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.3,
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        {
+          role: "system",
+          content: "あなたは中古品のプロ鑑定士です。日本円で数値を返してください。",
+        },
+        {
+          role: "user",
+          content: `
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+以下をJSONで返してください：
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "reason": string
+}
+`,
+        },
       ],
+      response_format: { type: "json_object" },
     });
 
-    const aiText = completion.choices[0].message.content;
-    const aiResult = JSON.parse(aiText);
+    const aiResult = JSON.parse(completion.choices[0].message.content);
 
-    const baseMarketPrice = Number(aiResult.marketPrice);
-    if (!baseMarketPrice || isNaN(baseMarketPrice)) {
-      return res.status(500).json({
-        error: "Invalid market price from AI",
-        raw: aiResult,
-      });
-    }
-
-    /* =========================
-       販売戦略ロジック
-    ========================= */
-    const sellMultiplier =
-      strategy === "早く売りたい" ? 0.95 :
-      strategy === "高値で売りたい" ? 1.1 :
-      1.0;
-
-    const profitRate =
-      strategy === "早く売りたい" ? 10 :
-      strategy === "高値で売りたい" ? 20 :
-      15;
-
-    const sellPrice = Math.round(baseMarketPrice * sellMultiplier);
-    const buyPrice = Math.round(
-      sellPrice * (1 - profitRate / 100)
+    /* ========= Google Sheets ========= */
+    const auth = new google.auth.JWT(
+      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      null,
+      process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      ["https://www.googleapis.com/auth/spreadsheets"]
     );
 
-    /* =========================
-       STUDIO / Glide に返却
-    ========================= */
-    return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason: aiResult.reason,
+    const sheets = google.sheets({ version: "v4", auth });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: "A1",
+      valueInputOption: "USER_ENTERED",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          category,
+          brand,
+          model,
+          condition,
+          year,
+          accessories,
+          strategy,
+          aiResult.buyPrice,
+          aiResult.sellPrice,
+          aiResult.profitRate,
+          aiResult.reason,
+        ]],
+      },
     });
 
+    /* ========= 最後にレスポンス ========= */
+    return res.status(200).json(aiResult);
+
   } catch (err) {
-    console.error("price error:", err);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error(err);
+    return res.status(500).json({ error: err.message });
   }
 }
+
 
