@@ -6,7 +6,7 @@ const openai = new OpenAI({
 
 export default async function handler(req, res) {
   /* =========================
-     CORS（Glide / STUDIO 必須）
+     CORS（STUDIO / Glide 必須）
   ========================= */
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -22,22 +22,33 @@ export default async function handler(req, res) {
 
   try {
     const {
-      category,   // STUDIO: 腕時計 / バッグ / スニーカー
+      category,   // ← STUDIO から送られるカテゴリ
       brand,
       model,
       condition,
       year,
       accessories,
-      strategy,   // 早く売りたい / バランス / 高値で売りたい
+      strategy,   // 早く売りたい / バランスよく売りたい / 高値で売りたい
     } = req.body;
 
     /* =========================
-       カテゴリ別プロンプト
+       カテゴリ別 AI 役割定義
     ========================= */
     const systemPromptMap = {
-      "腕時計": "あなたは高級腕時計専門の中古相場査定AIです。",
-      "バッグ": "あなたは高級ブランドバッグ専門の中古相場査定AIです。",
-      "スニーカー": "あなたは人気・限定スニーカー専門の中古相場査定AIです。",
+      "スニーカー":
+        "あなたは人気・限定スニーカー専門の中古市場価格査定AIです。",
+      "デニム":
+        "あなたはヴィンテージおよびブランドデニム専門の中古査定AIです。",
+      "バッグ":
+        "あなたは高級ブランドバッグ専門の中古市場査定AIです。",
+      "腕時計":
+        "あなたは高級腕時計専門の中古市場査定AIです。",
+      "トレーディングカード":
+        "あなたはトレーディングカード専門の市場価格査定AIです。",
+      "その他衣類":
+        "あなたはブランド衣類全般の中古市場査定AIです。",
+      "その他":
+        "あなたは中古商品の市場価格を推定するAIです。",
     };
 
     const systemPrompt =
@@ -49,12 +60,12 @@ export default async function handler(req, res) {
 
 カテゴリ：${category}
 ブランド：${brand}
-モデル：${model}
+モデル・名称：${model}
 状態：${condition}
 年式：${year}
 付属品：${accessories}
 
-必ず次の JSON 形式で返してください。
+必ず次の JSON 形式のみで返してください。
 {
   "marketPrice": number,
   "reason": string
@@ -73,20 +84,23 @@ export default async function handler(req, res) {
       ],
     });
 
-    const text = completion.choices[0].message.content;
-    const aiResult = JSON.parse(text);
+    const aiText = completion.choices[0].message.content;
+    const aiResult = JSON.parse(aiText);
 
     const baseMarketPrice = Number(aiResult.marketPrice);
     if (!baseMarketPrice || isNaN(baseMarketPrice)) {
-      return res.status(500).json({ error: "Invalid market price" });
+      return res.status(500).json({
+        error: "Invalid market price from AI",
+        raw: aiResult,
+      });
     }
 
     /* =========================
-       戦略別 売値調整
+       販売戦略ロジック
     ========================= */
     const sellMultiplier =
       strategy === "早く売りたい" ? 0.95 :
-      strategy === "高値で売りたい" ? 1.10 :
+      strategy === "高値で売りたい" ? 1.1 :
       1.0;
 
     const profitRate =
@@ -100,7 +114,7 @@ export default async function handler(req, res) {
     );
 
     /* =========================
-       レスポンス
+       STUDIO / Glide に返却
     ========================= */
     return res.status(200).json({
       buyPrice,
@@ -110,9 +124,8 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    console.error("watch-price error:", err);
+    console.error("price error:", err);
     return res.status(500).json({ error: "Internal server error" });
   }
 }
-
 
