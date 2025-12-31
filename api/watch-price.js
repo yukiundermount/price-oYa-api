@@ -1,15 +1,6 @@
 import { google } from "googleapis";
 
 export default async function handler(req, res) {
-  // ===== CORS対応 =====
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
@@ -26,19 +17,33 @@ export default async function handler(req, res) {
       buyPrice,
       sellPrice,
       profitRate,
-      reason
-    } = req.body;
+      reason,
+    } = req.body || {};
+
+    if (!category || !brand || !model) {
+      return res.status(400).json({ error: "Missing required parameters" });
+    }
+
+    // 🔴 ここが超重要
+    const credentials = JSON.parse(
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+    );
 
     const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+      credentials,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
 
     const sheets = google.sheets({ version: "v4", auth });
 
+    const spreadsheetId = process.env.SPREADSHEET_ID;
+    if (!spreadsheetId) {
+      throw new Error("SPREADSHEET_ID is not set");
+    }
+
     await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "シート1!A:L",
+      spreadsheetId,
+      range: "シート1!A1",
       valueInputOption: "RAW",
       requestBody: {
         values: [[
@@ -53,16 +58,15 @@ export default async function handler(req, res) {
           buyPrice,
           sellPrice,
           profitRate,
-          reason
-        ]]
-      }
+          reason,
+        ]],
+      },
     });
 
-    return res.status(200).json({ status: "ok" });
+    return res.status(200).json({ ok: true });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err.message });
   }
 }
-
