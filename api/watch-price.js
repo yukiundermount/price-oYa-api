@@ -1,36 +1,17 @@
+import { google } from "googleapis";
+
 export default async function handler(req, res) {
-  // --- CORS対応（最重要） ---
+  // ===== CORS対応 =====
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // OPTIONS はここで即終了
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  // POST 以外は拒否
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
-  // ↓↓↓ ここから下は今までの POST ロジックそのまま ↓↓↓
-}
-
-
-
-
-
-import OpenAI from "openai";
-import { google } from "googleapis";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
@@ -42,57 +23,23 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
+      buyPrice,
+      sellPrice,
+      profitRate,
+      reason
     } = req.body;
 
-    /* ========= AI 査定 ========= */
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "あなたは中古品のプロ鑑定士です。日本円で数値を返してください。",
-        },
-        {
-          role: "user",
-          content: `
-カテゴリ: ${category}
-ブランド: ${brand}
-モデル: ${model}
-状態: ${condition}
-年: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
-
-以下をJSONで返してください：
-{
-  "buyPrice": number,
-  "sellPrice": number,
-  "profitRate": number,
-  "reason": string
-}
-`,
-        },
-      ],
-      response_format: { type: "json_object" },
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
-
-    const aiResult = JSON.parse(completion.choices[0].message.content);
-
-    /* ========= Google Sheets ========= */
-    const auth = new google.auth.JWT(
-      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      null,
-      process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      ["https://www.googleapis.com/auth/spreadsheets"]
-    );
 
     const sheets = google.sheets({ version: "v4", auth });
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "A1",
-      valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
+      range: "シート1!A:L",
+      valueInputOption: "RAW",
       requestBody: {
         values: [[
           new Date().toISOString(),
@@ -103,21 +50,19 @@ export default async function handler(req, res) {
           year,
           accessories,
           strategy,
-          aiResult.buyPrice,
-          aiResult.sellPrice,
-          aiResult.profitRate,
-          aiResult.reason,
-        ]],
-      },
+          buyPrice,
+          sellPrice,
+          profitRate,
+          reason
+        ]]
+      }
     });
 
-    /* ========= 最後にレスポンス ========= */
-    return res.status(200).json(aiResult);
+    return res.status(200).json({ status: "ok" });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: err.message });
   }
 }
-
 
