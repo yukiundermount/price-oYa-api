@@ -1,10 +1,9 @@
 {
-  "name": "price-oYa-api",
+  "name": "price-o-ya-api",
   "version": "1.0.0",
-  "main": "api/price.js",
   "type": "module",
   "dependencies": {
-    "openai": "^4.0.0"
+    "openai": "^4.0.0",
     "googleapis": "^140.0.0"
   }
 }
