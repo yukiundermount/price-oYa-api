@@ -1,11 +1,16 @@
 import { google } from "googleapis";
 
+/**
+ * POST /api/watch-price
+ */
 export default async function handler(req, res) {
-  // CORS
+  // CORS（Glide / STUDIO 用）
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // preflight
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     return res.status(200).end();
   }
 
@@ -14,6 +19,19 @@ export default async function handler(req, res) {
   }
 
   try {
+    // ==========
+    // 環境変数チェック
+    // ==========
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
+    }
+    if (!process.env.SPREADSHEET_ID) {
+      throw new Error("Missing SPREADSHEET_ID");
+    }
+
+    // ==========
+    // リクエストBody
+    // ==========
     const {
       category,
       brand,
@@ -26,58 +44,60 @@ export default async function handler(req, res) {
       sellPrice,
       profitRate,
       reason
-    } = req.body || {};
+    } = req.body;
 
-    if (!category || !brand || !model) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // ===== Google Auth =====
-    const credentials = JSON.parse(
-      process.env.GOOGLE_SERVICE_ACCOUNT_JSON
-    );
-
+    // ==========
+    // Google Auth（★ここが最重要）
+    // ==========
     const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
     });
 
-    const sheets = google.sheets({ version: "v4", auth });
+    const sheets = google.sheets({
+      version: "v4",
+      auth
+    });
 
-    const spreadsheetId =
-      "1kL1fDZdQgJ3U8N6_dT50kOE3FdDPJAKAtbgkPGkea8w";
-
-    // ===== Append =====
+    // ==========
+    // スプレッドシートに追記
+    // ==========
     await sheets.spreadsheets.values.append({
-      spreadsheetId,
+      spreadsheetId: process.env.SPREADSHEET_ID,
       range: "シート1!A:Z",
-      valueInputOption: "RAW",
+      valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
           new Date().toISOString(),
-          category,
-          brand,
-          model,
-          condition,
-          year,
-          accessories,
-          strategy,
-          buyPrice,
-          sellPrice,
-          profitRate,
-          reason
+          category ?? "",
+          brand ?? "",
+          model ?? "",
+          condition ?? "",
+          year ?? "",
+          accessories ?? "",
+          strategy ?? "",
+          buyPrice ?? "",
+          sellPrice ?? "",
+          profitRate ?? "",
+          reason ?? ""
         ]]
       }
     });
 
-    return res.status(200).json({ status: "ok" });
+    // ==========
+    // 成功レスポンス
+    // ==========
+    return res.status(200).json({
+      status: "ok"
+    });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err.message
+      status: "error",
+      message: err.message
     });
   }
 }
+
 
