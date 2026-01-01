@@ -1,20 +1,19 @@
 import { google } from "googleapis";
 
 export default async function handler(req, res) {
-  // ===== CORS =====
+  // CORS
   if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     return res.status(200).end();
   }
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    // ===== bodyチェック =====
-    if (!req.body) {
-      return res.status(400).json({ error: "Request body is missing" });
-    }
-
     const {
       category,
       brand,
@@ -23,19 +22,20 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      price,
-    } = req.body;
+      buyPrice,
+      sellPrice,
+      profitRate,
+      reason
+    } = req.body || {};
 
-    if (!category || !price) {
-      return res.status(400).json({ error: "Missing required parameters" });
+    if (!category || !brand || !model) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // ===== Google認証 =====
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-      return res.status(500).json({ error: "Service account not set" });
-    }
-
-    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    // ===== Google Auth =====
+    const credentials = JSON.parse(
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+    );
 
     const auth = new google.auth.GoogleAuth({
       credentials,
@@ -44,18 +44,14 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: "v4", auth });
 
-    const spreadsheetId = process.env.SPREADSHEET_ID;
-    const sheetName = process.env.SHEET_NAME || "Sheet1";
+    const spreadsheetId =
+      "1kL1fDZdQgJ3U8N6_dT50kOE3FdDPJAKAtbgkPGkea8w";
 
-    if (!spreadsheetId) {
-      return res.status(500).json({ error: "SPREADSHEET_ID is missing" });
-    }
-
-    // ===== Sheets追記 =====
+    // ===== Append =====
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetName}!A1`,
-      valueInputOption: "USER_ENTERED",
+      range: "シート1!A:Z",
+      valueInputOption: "RAW",
       requestBody: {
         values: [[
           new Date().toISOString(),
@@ -66,18 +62,21 @@ export default async function handler(req, res) {
           year,
           accessories,
           strategy,
-          price,
-        ]],
-      },
+          buyPrice,
+          sellPrice,
+          profitRate,
+          reason
+        ]]
+      }
     });
 
-    return res.status(200).json({ success: true });
+    return res.status(200).json({ status: "ok" });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({
       error: "Internal Server Error",
-      detail: err.message,
+      detail: err.message
     });
   }
 }
