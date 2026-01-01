@@ -1,29 +1,20 @@
-export default async function handler(req, res) {
-  // ✅ CORS preflight 対応
-  if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
-  // ↓↓↓ ここから既存の POST 処理 ↓↓↓
-}
-
-
-
 import { google } from "googleapis";
 
 export default async function handler(req, res) {
+  // ===== CORS =====
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
+    // ===== bodyチェック =====
+    if (!req.body) {
+      return res.status(400).json({ error: "Request body is missing" });
+    }
+
     const {
       category,
       brand,
@@ -32,20 +23,19 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason,
-    } = req.body || {};
+      price,
+    } = req.body;
 
-    if (!category || !brand || !model) {
+    if (!category || !price) {
       return res.status(400).json({ error: "Missing required parameters" });
     }
 
-    // 🔴 ここが超重要
-    const credentials = JSON.parse(
-      process.env.GOOGLE_SERVICE_ACCOUNT_JSON
-    );
+    // ===== Google認証 =====
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      return res.status(500).json({ error: "Service account not set" });
+    }
+
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
 
     const auth = new google.auth.GoogleAuth({
       credentials,
@@ -55,14 +45,17 @@ export default async function handler(req, res) {
     const sheets = google.sheets({ version: "v4", auth });
 
     const spreadsheetId = process.env.SPREADSHEET_ID;
+    const sheetName = process.env.SHEET_NAME || "Sheet1";
+
     if (!spreadsheetId) {
-      throw new Error("SPREADSHEET_ID is not set");
+      return res.status(500).json({ error: "SPREADSHEET_ID is missing" });
     }
 
+    // ===== Sheets追記 =====
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: "シート1!A1",
-      valueInputOption: "RAW",
+      range: `${sheetName}!A1`,
+      valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
           new Date().toISOString(),
@@ -73,18 +66,19 @@ export default async function handler(req, res) {
           year,
           accessories,
           strategy,
-          buyPrice,
-          sellPrice,
-          profitRate,
-          reason,
+          price,
         ]],
       },
     });
 
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ success: true });
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err.message,
+    });
   }
 }
+
