@@ -1,10 +1,7 @@
 import { google } from "googleapis";
 
-/**
- * POST /api/watch-price
- */
 export default async function handler(req, res) {
-  // --- CORS（Glide / STUDIO 用） ---
+  // CORS（Glide / STUDIO 用）
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -18,84 +15,57 @@ export default async function handler(req, res) {
   }
 
   try {
-    // --- 必須環境変数チェック ---
-    const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-
-    if (!SERVICE_ACCOUNT_EMAIL) {
-      throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_EMAIL");
+    /* ========= 環境変数チェック ========= */
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON");
     }
-    if (!SPREADSHEET_ID) {
+    if (!process.env.SPREADSHEET_ID) {
       throw new Error("Missing SPREADSHEET_ID");
     }
 
-    // --- IAM（鍵なし）で Google 認証 ---
-    const auth = new google.auth.GoogleAuth({
+    /* ========= サービスアカウント読み込み ========= */
+    const credentials = JSON.parse(
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+    );
+
+    const auth = new google.auth.JWT({
+      client_email: credentials.client_email,
+      private_key: credentials.private_key,
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-      clientOptions: {
-        client_email: SERVICE_ACCOUNT_EMAIL,
-      },
     });
 
-    const authClient = await auth.getClient();
+    const sheets = google.sheets({ version: "v4", auth });
 
-    // --- Sheets API ---
-    const sheets = google.sheets({
-      version: "v4",
-      auth: authClient,
-    });
+    /* ========= 受信データ ========= */
+    const body = req.body;
 
-    const {
-      category,
-      brand,
-      model,
-      condition,
-      year,
-      accessories,
-      strategy,
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason,
-    } = req.body;
-
-    const timestamp = new Date().toISOString();
-
-    // --- 追記 ---
+    /* ========= スプレッドシート追記 ========= */
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: "シート1!A1",
-      valueInputOption: "USER_ENTERED",
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: "Sheet1!A1",
+      valueInputOption: "RAW",
       requestBody: {
-        values: [[
-          timestamp,
-          category,
-          brand,
-          model,
-          condition,
-          year,
-          accessories,
-          strategy,
-          buyPrice,
-          sellPrice,
-          profitRate,
-          reason,
-        ]],
+        values: [
+          [
+            new Date().toISOString(),
+            body?.title ?? "",
+            body?.price ?? "",
+            body?.category ?? "",
+          ],
+        ],
       },
     });
 
     return res.status(200).json({
       status: "ok",
-      message: "Spreadsheet updated",
+      message: "Sheet updated",
     });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({
-      status: "error",
-      message: err.message,
+      error: err.message,
     });
   }
 }
-
 
