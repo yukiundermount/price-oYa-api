@@ -1,7 +1,6 @@
 import { google } from "googleapis";
 
 export default async function handler(req: any, res: any) {
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -22,7 +21,6 @@ export default async function handler(req: any, res: any) {
       reason,
     } = req.body;
 
-    // ① 認証
     const auth = new google.auth.JWT(
       process.env.GOOGLE_CLIENT_EMAIL,
       undefined,
@@ -32,14 +30,13 @@ export default async function handler(req: any, res: any) {
 
     const sheets = google.sheets({ version: "v4", auth });
 
-    // ② 1行追記
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "シート1!A:Z",
+      range: "A1",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
-          timestamp ?? new Date().toISOString(),
+          timestamp,
           category,
           brand,
           model,
@@ -55,12 +52,9 @@ export default async function handler(req: any, res: any) {
       },
     });
 
-    return res.status(200).json({ status: "ok" });
+    return res.status(200).json({ ok: true });
   } catch (err: any) {
     console.error(err);
-    return res.status(500).json({
-      error: "failed_to_write_sheet",
-      detail: err.message,
-    });
+    return res.status(500).json({ error: err.message });
   }
 }
