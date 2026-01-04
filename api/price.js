@@ -1,10 +1,11 @@
+import OpenAI from "openai";
+
 export default async function handler(req, res) {
-  // ===== CORS対応（最重要）=====
+  /* ===== CORS（STUDIO iframe 対応） ===== */
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // OPTIONS（プリフライト）は即200で返す
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
@@ -21,16 +22,54 @@ export default async function handler(req, res) {
       condition,
       year,
       accessories,
-      strategy
+      strategy,
     } = req.body;
 
-    // ====== ここは既存のAI計算ロジック ======
-    const buyPrice = 900000;
-    const sellPrice = 1100000;
-    const profitRate = 22;
-    const reason = "market demand strong";
+    /* ===== OpenAI ===== */
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
 
-    // ====== Sheets書き込みAPIを内部呼び ======
+    const prompt = `
+あなたは日本の中古品プロ鑑定士です。
+以下の商品情報から価格を算出してください。
+
+【条件】
+- 日本円
+- 数値は整数
+- JSONのみ返す
+- buyPrice, sellPrice, profitRate, reason を必ず含める
+
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+【出力JSON形式】
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "reason": string
+}
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "Return ONLY valid JSON." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+    });
+
+    const result = JSON.parse(completion.choices[0].message.content);
+
+    /* ===== Sheet に書き込み（内部呼び出し） ===== */
     await fetch("https://price-o-ya-api.vercel.app/api/writeSheet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -43,24 +82,22 @@ export default async function handler(req, res) {
         year,
         accessories,
         strategy,
-        buyPrice,
-        sellPrice,
-        profitRate,
-        reason
-      })
+        buyPrice: result.buyPrice,
+        sellPrice: result.sellPrice,
+        profitRate: result.profitRate,
+        reason: result.reason,
+      }),
     });
 
-    // ====== iframeへ結果返却 ======
-    return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason
-    });
+    /* ===== フロントに返す ===== */
+    return res.status(200).json(result);
 
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: "Internal error" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      error: "AI calculation failed",
+    });
   }
 }
+
 
