@@ -1,4 +1,27 @@
+import { google } from "googleapis";
 import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// ===== Google Sheets =====
+async function writeToSheet(row) {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GCP_SERVICE_ACCOUNT),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  const sheets = google.sheets({ version: "v4", auth });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.SPREADSHEET_ID,
+    range: "シート1!A1",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [row],
+    },
+  });
+}
 
 export default async function handler(req, res) {
   // ===== CORS =====
@@ -25,90 +48,64 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
-    /**
-     * 🔴 重要：ここが肝
-     * ・不明でも「仮定して」必ず価格を出す
-     * ・0は禁止
-     * ・JSON以外禁止
-     */
+    // ===== AIプロンプト =====
     const prompt = `
-You are a professional second-hand goods appraiser in Japan.
+あなたは日本の高級中古品マーケットに精通したプロの査定士です。
 
-Even if some product information is missing or vague:
-- You MUST estimate reasonable prices based on similar items.
-- NEVER return 0.
-- NEVER say "cannot determine".
-- ALWAYS return numeric values.
+以下の商品情報から、
+1. 買取目安価格（円）
+2. 推奨販売価格（円）
+3. 想定利益率（%）
+4. 判断理由（日本語で具体的に）
 
-Return ONLY valid JSON with the following keys:
+を算出してください。
 
-buyPrice: number (JPY, integer, >= 1000)
-sellPrice: number (JPY, integer, > buyPrice)
-profitRate: number (integer percentage)
-reason: string (short Japanese explanation)
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
 
-Product info:
-category: ${category}
-brand: ${brand}
-model: ${model}
-condition: ${condition}
-year: ${year}
-accessories: ${accessories}
-strategy: ${strategy}
+【重要条件】
+- ロレックス、デイトナ等の高級時計は市場相場を反映すること
+- 極端に安い価格は禁止
+- 数値は現実的な中古市場価格
+- JSON形式で返すこと
 `;
 
-    const completion = await openai.chat.completions.create({
+    const aiRes = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [{ role: "system", content: prompt }],
-      temperature: 0.7,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.4,
     });
 
-    const text = completion.choices[0].message.content;
-    const result = JSON.parse(text);
+    const result = JSON.parse(aiRes.choices[0].message.content);
 
-    // ===== 念のための最終ガード =====
-    const buyPrice = Math.max(1000, Number(result.buyPrice));
-    const sellPrice = Math.max(buyPrice + 1000, Number(result.sellPrice));
-    const profitRate = Number(result.profitRate) || Math.round(((sellPrice - buyPrice) / sellPrice) * 100);
-    const reason = result.reason || "市場相場と類似商品の平均から算出しました。";
+    const timestamp = new Date().toISOString();
 
-    // ===== Sheets に書き込み =====
-    await fetch("https://price-o-ya-api.vercel.app/api/writeSheet", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        timestamp: new Date().toISOString(),
-        category,
-        brand,
-        model,
-        condition,
-        year,
-        accessories,
-        strategy,
-        buyPrice,
-        sellPrice,
-        profitRate,
-        reason,
-      }),
-    });
+    // ===== シート書き込み =====
+    await writeToSheet([
+      timestamp,
+      category,
+      brand,
+      model,
+      condition,
+      year,
+      accessories,
+      strategy,
+      result.buyPrice,
+      result.sellPrice,
+      result.profitRate,
+      result.reason,
+    ]);
 
-    // ===== STUDIO へ返却 =====
-    return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason,
-    });
-
+    return res.status(200).json(result);
   } catch (err) {
     console.error(err);
-    return res.status(500).json({
-      error: "AI査定に失敗しました",
-    });
+    return res.status(500).json({ error: "AI査定に失敗しました" });
   }
 }
 
