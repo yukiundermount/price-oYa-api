@@ -1,103 +1,97 @@
+import { google } from "googleapis";
 import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+/* ===== Google Sheets ===== */
+const auth = new google.auth.JWT(
+  process.env.GOOGLE_CLIENT_EMAIL,
+  null,
+  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  ["https://www.googleapis.com/auth/spreadsheets"]
+);
+
+const sheets = google.sheets({ version: "v4", auth });
+
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
+const SHEET_NAME = "シート1";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({
-        error: "OPENAI_API_KEY is not set"
-      });
-    }
+    const payload = JSON.parse(req.body.prompt);
 
-    const { prompt } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ error: "prompt is required" });
-    }
-
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-
+    /* ===== AI計算 ===== */
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
-          content: `
-You are a professional second-hand goods appraiser.
-Return ONLY valid JSON.
-Do NOT use code blocks.
-Use ONLY the following keys in English:
-
-{
-  "buy_price": 0,
-  "sell_price": 0,
-  "profit_rate": 0,
-  "reason": ""
-}
-`
+          content: "あなたは中古品の価格査定AIです。必ずJSONで返してください。",
         },
         {
           role: "user",
-          content: prompt
-        }
+          content: `
+以下の商品を査定してください。
+
+${JSON.stringify(payload, null, 2)}
+
+出力形式：
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "reason": string
+}
+`,
+        },
       ],
-      temperature: 0.3
+      temperature: 0.3,
     });
 
-    const rawText = completion.choices[0].message.content;
+    const aiResult = JSON.parse(
+      completion.choices[0].message.content
+    );
 
-    let ai;
-    try {
-      ai = JSON.parse(rawText);
-    } catch {
-      return res.status(500).json({
-        error: "AI response is not valid JSON",
-        raw: rawText
-      });
-    }
+    /* ===== Sheets書き込み ===== */
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[
+          new Date().toISOString(),
+          payload.category,
+          payload.brand,
+          payload.model,
+          payload.condition,
+          payload.year,
+          payload.accessories,
+          payload.strategy,
+          aiResult.buyPrice,
+          aiResult.sellPrice,
+          aiResult.profitRate,
+          aiResult.reason
+        ]],
+      },
+    });
 
-    // ==========
-    // 🔒 数値ガード
-    // ==========
-
-    let buy = Number(ai.buy_price);
-    let sell = Number(ai.sell_price);
-
-    if (isNaN(buy) || buy < 0) {
-      buy = 0;
-    }
-
-    if (isNaN(sell) || sell < buy) {
-      sell = buy;
-    }
-
-    // 利益率は必ずサーバーで再計算
-    const profitRate =
-      buy === 0 ? 0 : Math.round(((sell - buy) / buy) * 100);
-
-    // reason に補正ログを残す
-    let reason = ai.reason || "";
-    if (ai.buy_price < 0) {
-      reason += " (buy_price was corrected to 0)";
-    }
-    if (ai.sell_price < ai.buy_price) {
-      reason += " (sell_price was corrected)";
-    }
-
+    /* ===== フロントへ返す ===== */
     return res.status(200).json({
-      buy_price: buy,
-      sell_price: sell,
-      profit_rate: profitRate,
-      reason
+      buyPrice: aiResult.buyPrice,
+      sellPrice: aiResult.sellPrice,
+      profitRate: aiResult.profitRate,
+      reason: aiResult.reason,
     });
 
   } catch (err) {
-    return res.status(500).json({
-      error: err.message
-    });
+    console.error(err);
+    return res.status(500).json({ error: "AI処理に失敗しました" });
   }
 }
+
