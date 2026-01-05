@@ -88,23 +88,23 @@ export default async function handler(req, res) {
     }
 
     // Sheet保存（非同期だが await する）
-    await fetch(`${req.headers.origin}/api/writeSheet`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        category,
-        brand,
-        model,
-        condition,
-        year,
-        accessories,
-        strategy,
-        buyPrice: aiResult.buyPrice,
-        sellPrice: aiResult.sellPrice,
-        profitRate: aiResult.profitRate,
-        reason: aiResult.reason,
-      }),
-    });
+    await fetch(`${process.env.API_BASE_URL}/api/writeSheet`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    category,
+    brand,
+    model,
+    condition,
+    year,
+    accessories,
+    strategy,
+    buyPrice: aiResult.buyPrice,
+    sellPrice: aiResult.sellPrice,
+    profitRate: aiResult.profitRate,
+    reason: aiResult.reason,
+  }),
+});
 
     // Studio表示用レスポンス
     res.status(200).json({
