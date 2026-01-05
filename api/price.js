@@ -2,8 +2,22 @@
 import fetch from "node-fetch";
 
 export default async function handler(req, res) {
+  /* ===== CORS（最重要） ===== */
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // --- プリフライト対応 ---
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  // --- POST 以外拒否 ---
   if (req.method !== "POST") {
-    return res.status(405).json({ status: "error", message: "Method Not Allowed" });
+    return res.status(405).json({
+      status: "error",
+      message: "Method Not Allowed"
+    });
   }
 
   try {
@@ -17,7 +31,6 @@ export default async function handler(req, res) {
       strategy
     } = req.body || {};
 
-    // ---- 最低限のバリデーション ----
     if (!category || !condition || !strategy) {
       return res.status(200).json({
         status: "error",
@@ -25,12 +38,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---- AI へのプロンプト（完全版）----
+    /* ===== AI プロンプト ===== */
     const prompt = `
 あなたは中古市場のプロ鑑定士AIです。
-以下の商品情報から、現在の日本国内二次流通相場を踏まえ、
-「不自然に安すぎる／高すぎる価格」を出さないように注意して、
-現実的で売買成立しやすい価格を算出してください。
+以下の商品情報をもとに、日本国内の現実的な二次流通相場を考慮して
+「極端に安すぎる／高すぎる価格」を避け、実際に売買成立しやすい
+買取価格・販売価格を算出してください。
 
 【商品情報】
 カテゴリ: ${category}
@@ -41,25 +54,27 @@ export default async function handler(req, res) {
 付属品: ${accessories || "なし"}
 販売戦略: ${strategy}
 
-【出力ルール】
-- buyPrice（整数・円）
-- sellPrice（整数・円）
-- profitRate（整数・%）
-- confidence（0〜1）
-- reason（日本語で簡潔に）
-- warnings（あれば配列、なければ空配列）
+【出力形式（JSONのみ）】
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "confidence": number,
+  "reason": string,
+  "warnings": string[]
+}
 
 【制約】
-- sellPrice < buyPrice にならない
-- 極端な価格（相場の±50%以上）は避ける
-- 情報不足時は confidence を下げ、warnings に理由を書く
+- sellPrice < buyPrice は禁止
+- 相場から±50%以上乖離しない
+- 情報不足時は confidence を下げ warnings に理由を書く
 `;
 
-    // ---- OpenAI 呼び出し ----
+    /* ===== OpenAI ===== */
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -73,26 +88,24 @@ export default async function handler(req, res) {
     });
 
     const aiJson = await aiRes.json();
-    const text = aiJson?.choices?.[0]?.message?.content || "";
+    const content = aiJson?.choices?.[0]?.message?.content || "";
 
-    // ---- AI JSON を安全に抽出 ----
     let aiResult;
     try {
-      aiResult = JSON.parse(text);
+      aiResult = JSON.parse(content);
     } catch {
-      throw new Error("AIの出力がJSONではありません");
+      throw new Error("AI response is not valid JSON");
     }
 
-    // ---- 数値の安全化 ----
-    const buyPrice = Number(aiResult.buyPrice) || 0;
-    const sellPrice = Number(aiResult.sellPrice) || 0;
-    const profitRate = Number(aiResult.profitRate) || 0;
+    const buyPrice = Number(aiResult.buyPrice);
+    const sellPrice = Number(aiResult.sellPrice);
+    const profitRate = Number(aiResult.profitRate);
 
-    if (buyPrice <= 0 || sellPrice <= 0 || sellPrice < buyPrice) {
+    if (!buyPrice || !sellPrice || sellPrice < buyPrice) {
       throw new Error("Invalid price generated");
     }
 
-    // ---- Sheet 保存（非同期・失敗しても続行）----
+    /* ===== Sheet 保存（失敗してもUIは続行） ===== */
     fetch(`${process.env.API_BASE_URL}/api/writeSheet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -107,11 +120,11 @@ export default async function handler(req, res) {
         buyPrice,
         sellPrice,
         profitRate,
-        reason: aiResult.reason || aiResult.reasoning || ""
+        reason: aiResult.reason || ""
       })
     }).catch(() => {});
 
-    // ---- STUDIO iframe 用レスポンス（最重要）----
+    /* ===== STUDIO iframe 用レスポンス ===== */
     return res.status(200).json({
       status: "ok",
       result: {
@@ -119,7 +132,7 @@ export default async function handler(req, res) {
         price_sell: sellPrice,
         profit_margin: profitRate / 100,
         confidence: Number(aiResult.confidence) || 0.5,
-        reasoning: aiResult.reason || aiResult.reasoning || "",
+        reasoning: aiResult.reason || "",
         warnings: aiResult.warnings || []
       }
     });
@@ -132,4 +145,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
