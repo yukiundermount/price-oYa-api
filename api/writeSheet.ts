@@ -1,28 +1,27 @@
 import { google } from "googleapis";
 
-export default async function writeSheet(data: any) {
+export default async function writeSheet(data) {
   const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY!),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+    credentials: {
+      client_email: process.env.GOOGLE_CLIENT_EMAIL,
+      private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    },
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
   const sheets = google.sheets({ version: "v4", auth });
 
-  const spreadsheetId = process.env.SPREADSHEET_ID!;
-  const sheetName = "シート1";
+  const spreadsheetId = process.env.SPREADSHEET_ID;
 
-  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000)
-    .toISOString()
-    .replace("T", " ")
-    .replace("Z", "");
+  const now = new Date().toISOString();
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${sheetName}!A1`,
-    valueInputOption: "USER_ENTERED",
+    range: "シート1!A1",
+    valueInputOption: "RAW",
     requestBody: {
       values: [[
-        jst,
+        now,
         data.category,
         data.brand,
         data.model,
