@@ -1,9 +1,10 @@
 import { google } from "googleapis";
 
+// ===== 設定 =====
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// JST 時刻を文字列で生成
+// JST タイムスタンプ生成
 function getJSTTimestamp() {
   return new Date().toLocaleString("ja-JP", {
     timeZone: "Asia/Tokyo",
@@ -28,21 +29,34 @@ export default async function handler(req: any, res: any) {
   // =================
 
   if (req.method !== "POST") {
-    return res.status(405).json({ status: "error", message: "Method Not Allowed" });
+    return res.status(405).json({
+      status: "error",
+      message: "Method Not Allowed"
+    });
   }
 
   try {
-    const body = req.body;
+    // ===== 環境変数チェック（デバッグ用）=====
+    if (!process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_CLIENT_EMAIL) {
+      throw new Error("Google service account env vars are missing");
+    }
+    // ========================================
 
     const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY as string),
+      credentials: {
+        client_email: process.env.GOOGLE_CLIENT_EMAIL,
+        // Vercelでは改行が \n のまま入るため置換必須
+        private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
+      },
       scopes: SCOPES
     });
 
     const sheets = google.sheets({ version: "v4", auth });
 
+    const body = req.body || {};
+
     const values = [[
-      getJSTTimestamp(),                 // timestamp（JST）
+      getJSTTimestamp(),           // timestamp (JST)
       body.category || "",
       body.brand || "",
       body.model || "",
@@ -66,6 +80,8 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json({ status: "ok" });
 
   } catch (e: any) {
+    console.error("writeSheet error:", e);
+
     return res.status(500).json({
       status: "error",
       message: e.message
