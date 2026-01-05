@@ -1,32 +1,40 @@
 import OpenAI from "openai";
 import writeSheet from "./writeSheet.js";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// CORSヘルパー
+function setCors(res) {
+  // いったん全許可（運用で絞るなら STUDIO のドメインに限定）
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
 
 export default async function handler(req, res) {
-  if (req.method === "OPTIONS") return res.status(200).end();
+  setCors(res);
+
+  // Preflight
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
   if (req.method !== "POST") {
-    return res.status(405).json({ status: "error", message: "Method not allowed" });
+    return res
+      .status(405)
+      .json({ status: "error", message: "Method not allowed" });
   }
 
   try {
-    const {
-      category,
-      brand,
-      model,
-      condition,
-      year,
-      accessories,
-      strategy
-    } = req.body;
+    const { category, brand, model, condition, year, accessories, strategy } =
+      req.body || {};
 
     const systemPrompt = `
 あなたは日本の中古・新品市場に精通したプロ鑑定士AIです。
 現実的で市場から乖離しない価格を算出してください。
 confidence は 0〜1 の小数で返してください。
-出力は JSON のみ。
+出力は JSON のみで返してください（コードブロック禁止）。
 `;
 
     const userPrompt = `
@@ -40,7 +48,7 @@ confidence は 0〜1 の小数で返してください。
 付属品：${accessories}
 販売戦略：${strategy}
 
-出力形式：
+出力形式（JSONのみ）：
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -56,12 +64,14 @@ confidence は 0〜1 の小数で返してください。
       temperature: 0.3,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ]
+        { role: "user", content: userPrompt },
+      ],
     });
 
-    const aiResult = JSON.parse(completion.choices[0].message.content);
+    const content = completion.choices?.[0]?.message?.content || "{}";
+    const aiResult = JSON.parse(content);
 
+    // Sheets書き込み（失敗しても査定結果は返すようにしたいなら try/catch で囲む）
     await writeSheet({
       category,
       brand,
@@ -73,7 +83,7 @@ confidence は 0〜1 の小数で返してください。
       buyPrice: aiResult.buyPrice,
       sellPrice: aiResult.sellPrice,
       profitRate: aiResult.profitRate,
-      reason: aiResult.reason
+      reason: aiResult.reason,
     });
 
     return res.status(200).json({
@@ -81,18 +91,17 @@ confidence は 0〜1 の小数で返してください。
       result: {
         price_buy: aiResult.buyPrice,
         price_sell: aiResult.sellPrice,
-        profit_margin: aiResult.profitRate / 100,
-        confidence: aiResult.confidence,
+        profit_margin: (aiResult.profitRate || 0) / 100, // 0.10 = 10%
+        confidence: aiResult.confidence, // 0〜1
         reasoning: aiResult.reason,
-        warnings: aiResult.warnings || []
-      }
+        warnings: aiResult.warnings || [],
+      },
     });
-
   } catch (err) {
-    console.error(err);
+    console.error("price error:", err);
     return res.status(500).json({
       status: "error",
-      message: "査定に失敗しました"
+      message: "査定に失敗しました",
     });
   }
 }
