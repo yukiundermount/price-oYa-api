@@ -1,4 +1,6 @@
-export default async function handler(req, res) {
+const OpenAI = require("openai");
+
+module.exports = async function handler(req, res) {
 
   // ===== CORS対応（最重要）=====
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,13 +20,6 @@ export default async function handler(req, res) {
   }
 
   // ↓↓↓ ここから既存ロジック ↓↓↓
-
-
-
-const OpenAI = require("openai");
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
 });
 
 /**
