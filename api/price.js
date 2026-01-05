@@ -26,23 +26,52 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
-    const prompt = `価格査定テスト`;
+    // ===== 仮の価格ロジック（後でAIに置換可）=====
+    let buyPrice = 100000;
+    let sellPrice = 120000;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }]
+    if (body.strategy === "早く売りたい") {
+      sellPrice = Math.round(sellPrice * 0.95);
+    }
+    if (body.strategy === "高値で売りたい") {
+      sellPrice = Math.round(sellPrice * 1.05);
+    }
+
+    const profitRate = Math.round(((sellPrice - buyPrice) / sellPrice) * 100);
+
+    const result = {
+      price_buy: buyPrice,
+      price_sell: sellPrice,
+      profit_margin: profitRate / 100,
+      confidence: 0.8,
+      reasoning: "一般的な中古市場データを基に算出しました。",
+      warnings: []
+    };
+    // ============================================
+
+    // ===== Google Sheets に保存 =====
+    await fetch("https://price-o-ya-api.vercel.app/api/writeSheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: body.category,
+        brand: body.brand,
+        model: body.model,
+        condition: body.condition,
+        year: body.year,
+        accessories: body.accessories,
+        strategy: body.strategy,
+        buyPrice: result.price_buy,
+        sellPrice: result.price_sell,
+        profitRate,
+        reason: result.reasoning
+      })
     });
+    // =================================
 
     return res.status(200).json({
       status: "ok",
-      result: {
-        price_buy: 100000,
-        price_sell: 120000,
-        profit_margin: 0.2,
-        confidence: 0.8,
-        reasoning: "テスト",
-        warnings: []
-      }
+      result
     });
 
   } catch (e) {
@@ -52,4 +81,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
