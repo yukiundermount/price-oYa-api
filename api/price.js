@@ -91,7 +91,7 @@ confidence は 0〜1 の小数で返してください。
       result: {
         price_buy: aiResult.buyPrice,
         price_sell: aiResult.sellPrice,
-        profit_margin: (aiResult.profitRate || 0) / 100, // 0.10 = 10%
+        profit_margin: (aiResult.profitRate || 0), // 0.10 = 10%
         confidence: aiResult.confidence, // 0〜1
         reasoning: aiResult.reason,
         warnings: aiResult.warnings || [],
