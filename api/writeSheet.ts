@@ -1,67 +1,40 @@
 import { google } from "googleapis";
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ status: "error", message: "Method Not Allowed" });
-  }
+export default async function writeSheet(data: any) {
+  const auth = new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY!),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"]
+  });
 
-  try {
-    const {
-      category,
-      brand,
-      model,
-      condition,
-      year,
-      accessories,
-      strategy,
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason
-    } = req.body;
+  const sheets = google.sheets({ version: "v4", auth });
 
-    const auth = new google.auth.JWT(
-      process.env.GOOGLE_CLIENT_EMAIL,
-      undefined,
-      process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      ["https://www.googleapis.com/auth/spreadsheets"]
-    );
+  const spreadsheetId = process.env.SPREADSHEET_ID!;
+  const sheetName = "シート1";
 
-    const sheets = google.sheets({ version: "v4", auth });
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000)
+    .toISOString()
+    .replace("T", " ")
+    .replace("Z", "");
 
-    // JST タイムスタンプ
-    const now = new Date();
-    const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000)
-      .toISOString()
-      .replace("T", " ")
-      .slice(0, 19);
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "シート1!A1",
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[
-          jst,
-          category,
-          brand,
-          model,
-          condition,
-          year,
-          accessories,
-          strategy,
-          buyPrice,
-          sellPrice,
-          profitRate,
-          reason
-        ]]
-      }
-    });
-
-    return res.status(200).json({ status: "ok" });
-
-  } catch (err) {
-    console.error("writeSheet error:", err);
-    return res.status(500).json({ status: "error", message: err.message });
-  }
+  await sheets.spreadsheets.values.append({
+    spreadsheetId,
+    range: `${sheetName}!A1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[
+        jst,
+        data.category,
+        data.brand,
+        data.model,
+        data.condition,
+        data.year,
+        data.accessories,
+        data.strategy,
+        data.buyPrice,
+        data.sellPrice,
+        data.profitRate,
+        data.reason
+      ]]
+    }
+  });
 }
