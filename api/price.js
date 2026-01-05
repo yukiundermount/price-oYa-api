@@ -1,8 +1,8 @@
 import OpenAI from "openai";
-import writeSheet from "./writeSheet";
+import writeSheet from "./writeSheet.js";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export default async function handler(req, res) {
@@ -23,8 +23,8 @@ export default async function handler(req, res) {
     } = req.body;
 
     const systemPrompt = `
-あなたは中古・新品商品のプロ鑑定士AIです。
-日本国内の二次流通市場を前提に、現実的な価格を算出してください。
+あなたは日本の中古・新品市場に精通したプロ鑑定士AIです。
+現実的で市場から乖離しない価格を算出してください。
 confidence は 0〜1 の小数で返してください。
 出力は JSON のみ。
 `;
@@ -62,7 +62,6 @@ confidence は 0〜1 の小数で返してください。
 
     const aiResult = JSON.parse(completion.choices[0].message.content);
 
-    // Sheet 書き込み（await必須）
     await writeSheet({
       category,
       brand,
@@ -91,6 +90,9 @@ confidence は 0〜1 の小数で返してください。
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ status: "error", message: "査定に失敗しました" });
+    return res.status(500).json({
+      status: "error",
+      message: "査定に失敗しました"
+    });
   }
 }
