@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 export default async function handler(req, res) {
@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method Not Allowed" });
+    return res.status(405).json({ status: "error", message: "Method Not Allowed" });
   }
 
   try {
@@ -26,33 +26,29 @@ export default async function handler(req, res) {
       condition,
       year,
       accessories,
-      strategy,
+      strategy
     } = req.body;
 
-    /* ===============================
-       値付けoYa 専用プロンプト
-    =============================== */
+    /* ===== プロンプト ===== */
     const prompt = `
-あなたは中古品ビジネスのプロ査定士AIです。
+あなたは中古品のプロ鑑定士AIです。
 
-【カテゴリ】${category}
-【ブランド】${brand}
-【モデル】${model}
-【状態】${condition}
-【年式】${year}
-【付属品】${accessories}
-【販売戦略】${strategy}
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
 
-以下の条件を必ず守ってください。
+【出力ルール】
+- buyPrice, sellPrice は整数（円）
+- profitRate は整数（%）
+- confidence は 0〜100
+- JSONのみ返す
 
-- 現実の中古市場相場から大きく外れない
-- 新品定価や異常値を出さない
-- 売却可能性を重視する
-- 利益率は 10〜40% の範囲に収める
-- 数値はすべて整数（円）
-- JSONのみで回答する
-
-出力形式：
+【出力形式】
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -64,26 +60,18 @@ export default async function handler(req, res) {
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "You are a professional resale pricing AI." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.4,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3
     });
 
-    const aiResult = JSON.parse(
-      completion.choices[0].message.content
-    );
+    const aiResult = JSON.parse(completion.choices[0].message.content);
 
-    if (
-      !aiResult.buyPrice ||
-      !aiResult.sellPrice ||
-      aiResult.sellPrice <= aiResult.buyPrice
-    ) {
-      throw new Error("Invalid price generated");
+    // バリデーション
+    if (!aiResult.buyPrice || !aiResult.sellPrice) {
+      throw new Error("Invalid AI result");
     }
 
-    // 🔽 Sheet保存（ここ重要）
+    /* ===== Sheet保存（await しないと race condition）===== */
     await fetch(`${process.env.API_BASE_URL}/api/writeSheet`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -98,24 +86,27 @@ export default async function handler(req, res) {
         buyPrice: aiResult.buyPrice,
         sellPrice: aiResult.sellPrice,
         profitRate: aiResult.profitRate,
-        reason: aiResult.reason,
-      }),
+        reason: aiResult.reason
+      })
     });
 
-    // Studio返却
+    /* ===== STUDIO 用レスポンス（最重要）===== */
     return res.status(200).json({
-      buyPrice: aiResult.buyPrice,
-      sellPrice: aiResult.sellPrice,
-      profitRate: aiResult.profitRate,
-      confidence: aiResult.confidence,
-      reason: aiResult.reason,
+      status: "ok",
+      result: {
+        buyPrice: aiResult.buyPrice,
+        sellPrice: aiResult.sellPrice,
+        profitRate: aiResult.profitRate,
+        confidence: aiResult.confidence,
+        reason: aiResult.reason
+      }
     });
 
   } catch (err) {
     console.error("price error:", err);
     return res.status(200).json({
-      error: true,
-      message: "査定に失敗しました",
+      status: "error",
+      message: "査定に失敗しました"
     });
   }
 }
