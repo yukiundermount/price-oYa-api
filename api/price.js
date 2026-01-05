@@ -1,5 +1,9 @@
 import OpenAI from "openai";
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 export default async function handler(req, res) {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -11,7 +15,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
+    return res.status(405).json({ message: "Method Not Allowed" });
   }
 
   try {
@@ -25,34 +29,30 @@ export default async function handler(req, res) {
       strategy,
     } = req.body;
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
     /* ===============================
-       AI PROMPT（ここが心臓部）
+       値付けoYa 専用プロンプト
     =============================== */
-
     const prompt = `
-あなたは日本市場の中古・リセール専門のプロ査定AIです。
+あなたは中古品ビジネスのプロ査定士AIです。
 
-【商品情報】
-- カテゴリ: ${category}
-- ブランド: ${brand}
-- モデル: ${model}
-- 状態: ${condition}
-- 年: ${year}
-- 付属品: ${accessories}
-- 販売戦略: ${strategy}
+【カテゴリ】${category}
+【ブランド】${brand}
+【モデル】${model}
+【状態】${condition}
+【年式】${year}
+【付属品】${accessories}
+【販売戦略】${strategy}
 
-【ルール】
-- 実在しない相場を作らない
-- 極端に安すぎる / 高すぎる価格は禁止
-- 市場感・流動性・戦略を考慮
-- 数字はすべて整数（円）
-- 不明要素が多い場合は保守的に
+以下の条件を必ず守ってください。
 
-【出力形式（JSONのみ）】
+- 現実の中古市場相場から大きく外れない
+- 新品定価や異常値を出さない
+- 売却可能性を重視する
+- 利益率は 10〜40% の範囲に収める
+- 数値はすべて整数（円）
+- JSONのみで回答する
+
+出力形式：
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -75,39 +75,35 @@ export default async function handler(req, res) {
       completion.choices[0].message.content
     );
 
-    /* ===============================
-       不適切価格 防御ロジック
-    =============================== */
-
     if (
-      aiResult.buyPrice <= 0 ||
-      aiResult.sellPrice <= 0 ||
+      !aiResult.buyPrice ||
+      !aiResult.sellPrice ||
       aiResult.sellPrice <= aiResult.buyPrice
     ) {
       throw new Error("Invalid price generated");
     }
 
-    // Sheet保存（非同期だが await する）
+    // 🔽 Sheet保存（ここ重要）
     await fetch(`${process.env.API_BASE_URL}/api/writeSheet`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    category,
-    brand,
-    model,
-    condition,
-    year,
-    accessories,
-    strategy,
-    buyPrice: aiResult.buyPrice,
-    sellPrice: aiResult.sellPrice,
-    profitRate: aiResult.profitRate,
-    reason: aiResult.reason,
-  }),
-});
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category,
+        brand,
+        model,
+        condition,
+        year,
+        accessories,
+        strategy,
+        buyPrice: aiResult.buyPrice,
+        sellPrice: aiResult.sellPrice,
+        profitRate: aiResult.profitRate,
+        reason: aiResult.reason,
+      }),
+    });
 
-    // Studio表示用レスポンス
-    res.status(200).json({
+    // Studio返却
+    return res.status(200).json({
       buyPrice: aiResult.buyPrice,
       sellPrice: aiResult.sellPrice,
       profitRate: aiResult.profitRate,
@@ -117,6 +113,9 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error("price error:", err);
-    res.status(500).json({ error: "Price calculation failed" });
+    return res.status(200).json({
+      error: true,
+      message: "査定に失敗しました",
+    });
   }
 }
