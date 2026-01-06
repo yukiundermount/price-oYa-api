@@ -32,16 +32,16 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      images, // ← Studio から渡る想定（File → URL 文字列配列）
+      imageUrls = [], // ← 重要：必ず配列
     } = req.body || {};
 
-    // ✅ 画像ログ用（AIには渡さない）
-    const imageUrls = Array.isArray(images) ? images : [];
-    const imageCount = imageUrls.length;
+    const safeImageUrls = Array.isArray(imageUrls) ? imageUrls : [];
+    const imageCount = safeImageUrls.length;
 
     const systemPrompt = `
-あなたは日本の中古市場に精通したプロ鑑定士AIです。
-出力は JSON のみで返してください。
+あなたは日本の中古・新品市場に精通したプロ鑑定士AIです。
+出力は JSON のみ。
+confidence / profitRate は 0〜1。
 `;
 
     const userPrompt = `
@@ -50,11 +50,15 @@ export default async function handler(req, res) {
 ブランド: ${brand}
 モデル: ${model}
 状態: ${condition}
-年式: ${year}
+年: ${year}
 付属品: ${accessories}
 販売戦略: ${strategy}
 
-【出力形式】
+【画像情報】
+枚数: ${imageCount}
+URL: ${safeImageUrls.join(", ")}
+
+【出力形式(JSONのみ)】
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -76,22 +80,26 @@ export default async function handler(req, res) {
     const content = completion.choices?.[0]?.message?.content || "{}";
     const aiResult = JSON.parse(content);
 
-    // ✅ Sheets へ保存（ここが正解）
-    await writeSheet({
-      category,
-      brand,
-      model,
-      condition,
-      year,
-      accessories,
-      strategy,
-      imageUrls,
-      imageCount,
-      buyPrice: aiResult.buyPrice,
-      sellPrice: aiResult.sellPrice,
-      profitRate: aiResult.profitRate,
-      reason: aiResult.reason,
-    });
+    // Sheet保存（失敗してもレスポンスは返す）
+    try {
+      await writeSheet({
+        category,
+        brand,
+        model,
+        condition,
+        year,
+        accessories,
+        strategy,
+        imageUrls: safeImageUrls.join(","),
+        imageCount,
+        buyPrice: aiResult.buyPrice,
+        sellPrice: aiResult.sellPrice,
+        profitRate: aiResult.profitRate,
+        reason: aiResult.reason,
+      });
+    } catch (sheetErr) {
+      console.error("sheet write failed:", sheetErr);
+    }
 
     return res.status(200).json({
       status: "ok",
@@ -101,6 +109,7 @@ export default async function handler(req, res) {
         profitRate: aiResult.profitRate,
         confidence: aiResult.confidence,
         reason: aiResult.reason,
+        imageCount,
       },
     });
   } catch (err) {
@@ -111,4 +120,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
