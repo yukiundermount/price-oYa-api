@@ -38,17 +38,36 @@ confidence は 0〜1 の小数で返してください。
 `;
 
     const userPrompt = `
-以下の商品を査定してください。
+あなたは日本のリユース市場・中古相場に精通したプロの鑑定士です。
+以下の商品情報と、提供されている場合は商品画像を総合的に判断し、
+「実際の中古市場で成立しやすい現実的な価格」を算出してください。
 
-カテゴリ：${category}
-ブランド：${brand}
-モデル：${model}
-状態：${condition}
-年：${year}
-付属品：${accessories}
-販売戦略：${strategy}
+【重要な評価ルール】
+- 相場とかけ離れた価格は出さない
+- 利益率は (販売価格 - 仕入価格) / 販売価格
+- profitRate / confidence は 0〜1 の小数
+- 不明点が多い場合は confidence を下げる
 
-出力形式（JSONのみ）：
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+【画像について】
+- images が存在する場合、それらは実物の商品画像です
+- 状態、傷、使用感、真贋リスク、付属品の有無を必ず確認してください
+- 画像が無い場合はテキスト情報のみで判断してください
+
+【販売戦略の考慮】
+- quick_sell: 相場下限寄り
+- balance: 相場中央値
+- high_price: 相場上限寄り
+
+【出力形式（JSONのみ）】
 {
   "buyPrice": number,
   "sellPrice": number,
