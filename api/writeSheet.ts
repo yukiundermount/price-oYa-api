@@ -10,7 +10,7 @@ const auth = new google.auth.JWT(
 const sheets = google.sheets({ version: "v4", auth });
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = "price_logs";
+const SHEET_NAME = "Sheet1";
 
 export async function writeSheet(data) {
   const values = [[
