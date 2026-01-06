@@ -5,7 +5,6 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // CORSヘルパー
 function setCors(res) {
-  // いったん全許可（運用で絞るなら STUDIO のドメインに限定）
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -38,16 +37,6 @@ confidence は 0〜1 の小数で返してください。
 `;
 
     const userPrompt = `
-あなたは日本のリユース市場・中古相場に精通したプロの鑑定士です。
-以下の商品情報と、提供されている場合は商品画像を総合的に判断し、
-「実際の中古市場で成立しやすい現実的な価格」を算出してください。
-
-【重要な評価ルール】
-- 相場とかけ離れた価格は出さない
-- 利益率は (販売価格 - 仕入価格) / 販売価格
-- profitRate / confidence は 0〜1 の小数
-- 不明点が多い場合は confidence を下げる
-
 【商品情報】
 カテゴリ: ${category}
 ブランド: ${brand}
@@ -57,15 +46,12 @@ confidence は 0〜1 の小数で返してください。
 付属品: ${accessories}
 販売戦略: ${strategy}
 
-【画像について】
-- images が存在する場合、それらは実物の商品画像です
-- 状態、傷、使用感、真贋リスク、付属品の有無を必ず確認してください
-- 画像が無い場合はテキスト情報のみで判断してください
-
-【販売戦略の考慮】
-- quick_sell: 相場下限寄り
+【評価ルール】
+- 利益率 = (販売価格 - 仕入価格) / 販売価格
+- profitRate / confidence は 0〜1
+- quick_sell: 相場下限
 - balance: 相場中央値
-- high_price: 相場上限寄り
+- high_price: 相場上限
 
 【出力形式（JSONのみ）】
 {
@@ -90,7 +76,7 @@ confidence は 0〜1 の小数で返してください。
     const content = completion.choices?.[0]?.message?.content || "{}";
     const aiResult = JSON.parse(content);
 
-    // Sheets書き込み（失敗しても査定結果は返すようにしたいなら try/catch で囲む）
+    // ✅ Sheets への書き込み（imageInfo は渡さない）
     await writeSheet({
       category,
       brand,
@@ -99,7 +85,6 @@ confidence は 0〜1 の小数で返してください。
       year,
       accessories,
       strategy,
-      imageInfo, // ← これを渡す
       buyPrice: aiResult.buyPrice,
       sellPrice: aiResult.sellPrice,
       profitRate: aiResult.profitRate,
@@ -111,8 +96,8 @@ confidence は 0〜1 の小数で返してください。
       result: {
         price_buy: aiResult.buyPrice,
         price_sell: aiResult.sellPrice,
-        profit_margin: (aiResult.profitRate || 0), // 0.10 = 10%
-        confidence: aiResult.confidence, // 0〜1
+        profit_margin: aiResult.profitRate || 0,
+        confidence: aiResult.confidence,
         reasoning: aiResult.reason,
         warnings: aiResult.warnings || [],
       },
@@ -125,3 +110,4 @@ confidence は 0〜1 の小数で返してください。
     });
   }
 }
+
