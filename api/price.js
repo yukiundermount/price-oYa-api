@@ -99,6 +99,7 @@ confidence は 0〜1 の小数で返してください。
       year,
       accessories,
       strategy,
+      imageInfo, // ← これを渡す
       buyPrice: aiResult.buyPrice,
       sellPrice: aiResult.sellPrice,
       profitRate: aiResult.profitRate,
