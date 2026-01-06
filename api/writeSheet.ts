@@ -1,10 +1,18 @@
 import { google } from "googleapis";
 
-const sheets = google.sheets("v4");
+const auth = new google.auth.GoogleAuth({
+  credentials: {
+    client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  },
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+
+const sheets = google.sheets({ version: "v4", auth });
 
 export async function writeSheet(data: any) {
   const values = [[
-    new Date().toISOString(),          // timestamp
+    new Date().toISOString(),
     data.category ?? "",
     data.brand ?? "",
     data.model ?? "",
@@ -12,8 +20,8 @@ export async function writeSheet(data: any) {
     data.year ?? "",
     data.accessories ?? "",
     data.strategy ?? "",
-    (data.imageUrls || []).join("\n"), // imageUrls
-    data.imageCount ?? 0,              // imageCount
+    (data.imageUrls || []).join("\n"),
+    data.imageCount ?? 0,
     data.buyPrice ?? "",
     data.sellPrice ?? "",
     data.profitRate ?? "",
