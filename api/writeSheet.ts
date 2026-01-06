@@ -29,6 +29,8 @@ export default async function writeSheet(data) {
         data.year,
         data.accessories,
         data.strategy,
+        imageUrls?.join("\n") || "",
+        imageUrls?.length || 0,
         data.buyPrice,
         data.sellPrice,
         data.profitRate,
