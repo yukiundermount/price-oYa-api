@@ -1,12 +1,19 @@
 import { google } from "googleapis";
 
-const sheets = google.sheets("v4");
+const auth = new google.auth.JWT(
+  process.env.GOOGLE_CLIENT_EMAIL,
+  undefined,
+  process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  ["https://www.googleapis.com/auth/spreadsheets"]
+);
+
+const sheets = google.sheets({
+  version: "v4",
+  auth,
+});
 
 export async function writeSheet(data: any) {
-  // ★ imageUrls は使わない
-  const imageInfo = Array.isArray(data.imageInfo)
-    ? data.imageInfo
-    : [];
+  const imageInfo = Array.isArray(data.imageInfo) ? data.imageInfo : [];
 
   const values = [[
     new Date().toISOString(),
@@ -19,7 +26,7 @@ export async function writeSheet(data: any) {
     data.aiPrice ?? "",
     data.buyPrice ?? "",
     data.margin ?? "",
-    JSON.stringify(imageInfo), // ← ここが画像欄
+    JSON.stringify(imageInfo),
     data.aiReason ?? ""
   ]];
 
@@ -27,8 +34,6 @@ export async function writeSheet(data: any) {
     spreadsheetId: process.env.SPREADSHEET_ID!,
     range: "price_logs!A1",
     valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values
-    }
+    requestBody: { values }
   });
 }
