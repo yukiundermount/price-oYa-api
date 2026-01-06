@@ -30,7 +30,7 @@ export async function writeSheet(data: any) {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.SPREADSHEET_ID!,
-    range: "price_logs!A1",
+    range: "Sheet1!A1", // ← ★ここが今回の修正点
     valueInputOption: "USER_ENTERED",
     requestBody: { values },
   });
