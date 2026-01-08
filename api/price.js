@@ -1,85 +1,38 @@
+import OpenAI from "openai";
 import { writeSheet } from "./writeSheet.js";
 
-/**
- * POST /api/price
- * STUDIO からの商品査定リクエストを受け取り
- * 価格算出 → Google Sheets へ保存 → 結果を返却
- */
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// -------------------------
+// CORS ヘルパー
+// -------------------------
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 export default async function handler(req, res) {
+  setCors(res);
+
+  // ✅ Preflight（これが無いと 405）
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  // POST 以外は拒否
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({
+      status: "error",
+      message: "Method not allowed",
+    });
   }
 
   try {
-    // -----------------------------
-    // 1. リクエスト body の安全な取得
-    // -----------------------------
-    const body =
-      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-
     const {
-      category = "",
-      brand = "",
-      model = "",
-      condition = "",
-      year = "",
-      accessories = "",
-      strategy = "",
-    } = body;
-
-    // -----------------------------
-    // 2. 画像URLの取得（超重要）
-    // -----------------------------
-    // STUDIO 側の実装差異に耐える
-    // - images: ["url1", "url2"]
-    // - imageUrls: "url1,url2"
-    const images = Array.isArray(body.images) ? body.images : [];
-
-    const imageUrls = images.length
-      ? images.join(",")
-      : typeof body.imageUrls === "string"
-      ? body.imageUrls
-      : "";
-
-    const imageCount = images.length
-      ? images.length
-      : imageUrls
-      ? imageUrls.split(",").filter(Boolean).length
-      : 0;
-
-    // -----------------------------
-    // 3. 価格ロジック（仮・安定版）
-    // ※ 後でAI / Vision判定に置換OK
-    // -----------------------------
-    let basePrice = 0;
-
-    if (brand.includes("ロレックス") || brand.toUpperCase().includes("ROLEX")) {
-      basePrice = 1200000;
-    }
-
-    if (strategy === "high_price") {
-      basePrice *= 1.25;
-    } else if (strategy === "quick_sell") {
-      basePrice *= 1.0;
-    } else {
-      basePrice *= 1.15; // balance
-    }
-
-    const buyPrice = Math.round(basePrice);
-    const sellPrice = Math.round(basePrice * 1.25);
-    const profitRate =
-      buyPrice > 0
-        ? Number(((sellPrice - buyPrice) / buyPrice).toFixed(3))
-        : 0;
-
-    const reason =
-      "ブランド人気・状態・付属品および販売戦略を考慮した価格設定です。";
-
-    // -----------------------------
-    // 4. Google Sheets に保存
-    // -----------------------------
-    await writeSheet({
-      timestamp: new Date().toISOString(),
       category,
       brand,
       model,
@@ -87,28 +40,86 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      imageUrls,
-      imageCount,
-      buyPrice,
-      sellPrice,
-      profitRate,
-      reason,
+      imageUrls = [],
+    } = req.body || {};
+
+    const systemPrompt = `
+あなたは日本の中古・新品市場に精通したプロ鑑定士AIです。
+出力は JSON のみで返してください（コードブロック禁止）。
+`;
+
+    const userPrompt = `
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+
+【画像】
+${imageUrls.join("\n")}
+
+【出力形式】
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "confidence": number,
+  "reason": string
+}
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
     });
 
-    // -----------------------------
-    // 5. STUDIO に返却
-    // -----------------------------
+    const content = completion.choices?.[0]?.message?.content || "{}";
+    const result = JSON.parse(content);
+
+    // Sheet 書き込み（失敗しても返却は継続）
+    try {
+      await writeSheet({
+        timestamp: new Date().toISOString(),
+        category,
+        brand,
+        model,
+        condition,
+        year,
+        accessories,
+        strategy,
+        imageUrls: imageUrls.join(","),
+        imageCount: imageUrls.length,
+        buyPrice: result.buyPrice,
+        sellPrice: result.sellPrice,
+        profitRate: result.profitRate,
+        reason: result.reason,
+      });
+    } catch (e) {
+      console.error("sheet write failed:", e);
+    }
+
     return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      confidence: imageCount > 0 ? 0.9 : 0.7,
-      reason,
+      status: "ok",
+      result: {
+        price_buy: result.buyPrice,
+        price_sell: result.sellPrice,
+        profit_margin: result.profitRate,
+        confidence: result.confidence,
+        reasoning: result.reason,
+      },
     });
   } catch (err) {
     console.error("price error:", err);
     return res.status(500).json({
-      error: "price calculation failed",
+      status: "error",
+      message: "査定に失敗しました",
     });
   }
 }
