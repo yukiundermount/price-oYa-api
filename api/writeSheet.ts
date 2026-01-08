@@ -1,10 +1,7 @@
+// /api/writeSheet.ts
 import { google } from "googleapis";
 
-/**
- * Google Sheets に1行書き込む
- */
-export async function writeSheet(row: {
-  timestamp: string;
+type WriteSheetParams = {
   category: string;
   brand: string;
   model: string;
@@ -12,15 +9,18 @@ export async function writeSheet(row: {
   year: number | string;
   accessories: string;
   strategy: string;
-  imageUrls: string[];
+
+  imageUrls: string[];   // ← 配列で受け取る
   buyPrice: number;
   sellPrice: number;
-  profitRate: number; // 0.2 = 20%
+
+  profitRate: number;   // 0〜1
+  confidence: number;   // 0〜1
   reason: string;
-}) {
-  // ================================
-  // 1. 環境変数チェック
-  // ================================
+};
+
+export async function writeSheet(params: WriteSheetParams) {
+  // ========= 1. 環境変数チェック =========
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
   }
@@ -28,9 +28,7 @@ export async function writeSheet(row: {
     throw new Error("SPREADSHEET_ID is not set");
   }
 
-  // ================================
-  // 2. 認証情報
-  // ================================
+  // ========= 2. サービスアカウント認証 =========
   const credentials = JSON.parse(
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON
   );
@@ -45,58 +43,44 @@ export async function writeSheet(row: {
     auth,
   });
 
-  // ================================
-  // 3. 値の正規化
-  // ================================
-  const imageUrlsJoined =
-    row.imageUrls && row.imageUrls.length > 0
-      ? row.imageUrls.join(",")
+  // ========= 3. データ整形 =========
+  const timestamp = new Date().toISOString();
+
+  const imageUrlsString =
+    params.imageUrls && params.imageUrls.length > 0
+      ? params.imageUrls.join(",")
       : "";
 
-  const imageCount = row.imageUrls ? row.imageUrls.length : 0;
+  const imageCount = params.imageUrls
+    ? params.imageUrls.length
+    : 0;
 
-  // 利益率：必ず 0〜1 に収める
-  const normalizedProfitRate = Math.max(
-    0,
-    Math.min(row.profitRate, 1)
-  );
-
-  // 表示用％（0〜100）
-  const profitRatePercent = Number(
-    (normalizedProfitRate * 100).toFixed(1)
-  );
-
-  // ================================
-  // 4. 書き込み行
-  // ================================
-  const values = [
-    [
-      row.timestamp,
-      row.category,
-      row.brand,
-      row.model,
-      row.condition,
-      row.year,
-      row.accessories,
-      row.strategy,
-      imageUrlsJoined,
-      imageCount,
-      row.buyPrice,
-      row.sellPrice,
-      profitRatePercent,
-      row.reason,
-    ],
+  // profitRate / confidence は **0〜1のまま保存**
+  const row = [
+    timestamp,                 // A timestamp
+    params.category,            // B category
+    params.brand,               // C brand
+    params.model,               // D model
+    params.condition,           // E condition
+    params.year,                // F year
+    params.accessories,         // G accessories
+    params.strategy,            // H strategy
+    imageUrlsString,            // I imageUrls
+    imageCount,                 // J imageCount
+    params.buyPrice,            // K buyPrice
+    params.sellPrice,           // L sellPrice
+    params.profitRate,          // M profitRate (0〜1)
+    params.reason               // N reason
   ];
 
-  // ================================
-  // 5. Sheets append
-  // ================================
+  // ========= 4. Sheets に append =========
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.SPREADSHEET_ID,
     range: "Sheet1!A:N",
     valueInputOption: "USER_ENTERED",
+    insertDataOption: "INSERT_ROWS",
     requestBody: {
-      values,
+      values: [row],
     },
   });
 }
