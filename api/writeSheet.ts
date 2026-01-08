@@ -1,7 +1,6 @@
-// /api/writeSheet.ts
 import { google } from "googleapis";
 
-type WriteSheetParams = {
+type WriteSheetInput = {
   category: string;
   brand: string;
   model: string;
@@ -10,77 +9,69 @@ type WriteSheetParams = {
   accessories: string;
   strategy: string;
 
-  imageUrls: string[];   // ← 配列で受け取る
+  imageUrls: string[];   // 画像URL配列
+  imageCount: number;
+
   buyPrice: number;
   sellPrice: number;
-
-  profitRate: number;   // 0〜1
-  confidence: number;   // 0〜1
+  profitRate: number;    // 0.25 のような実数
   reason: string;
 };
 
-export async function writeSheet(params: WriteSheetParams) {
-  // ========= 1. 環境変数チェック =========
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
+export async function writeSheet(data: WriteSheetInput) {
+  try {
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
+    }
+
+    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+
+    const auth = new google.auth.JWT(
+      creds.client_email,
+      undefined,
+      creds.private_key,
+      ["https://www.googleapis.com/auth/spreadsheets"]
+    );
+
+    const sheets = google.sheets({ version: "v4", auth });
+
+    const spreadsheetId = process.env.SPREADSHEET_ID;
+    if (!spreadsheetId) {
+      throw new Error("SPREADSHEET_ID is not set");
+    }
+
+    const timestamp = new Date().toISOString();
+
+    const values = [
+      [
+        timestamp,                    // A timestamp
+        data.category,                // B category
+        data.brand,                   // C brand
+        data.model,                   // D model
+        data.condition,               // E condition
+        data.year,                    // F year
+        data.accessories,             // G accessories
+        data.strategy,                // H strategy
+        data.imageUrls.join(","),     // I imageUrls
+        data.imageCount,              // J imageCount
+        data.buyPrice,                // K buyPrice
+        data.sellPrice,               // L sellPrice
+        data.profitRate,              // M profitRate (0.25)
+        data.reason                   // N reason
+      ]
+    ];
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: "Sheet1!A:N",
+      valueInputOption: "RAW",
+      requestBody: { values }
+    });
+
+    return { ok: true };
+  } catch (err) {
+    console.error("sheet write failed:", err);
+    return { ok: false, error: String(err) };
   }
-  if (!process.env.SPREADSHEET_ID) {
-    throw new Error("SPREADSHEET_ID is not set");
-  }
-
-  // ========= 2. サービスアカウント認証 =========
-  const credentials = JSON.parse(
-    process.env.GOOGLE_SERVICE_ACCOUNT_JSON
-  );
-
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-
-  const sheets = google.sheets({
-    version: "v4",
-    auth,
-  });
-
-  // ========= 3. データ整形 =========
-  const timestamp = new Date().toISOString();
-
-  const imageUrlsString =
-    params.imageUrls && params.imageUrls.length > 0
-      ? params.imageUrls.join(",")
-      : "";
-
-  const imageCount = params.imageUrls
-    ? params.imageUrls.length
-    : 0;
-
-  // profitRate / confidence は **0〜1のまま保存**
-  const row = [
-    timestamp,                 // A timestamp
-    params.category,            // B category
-    params.brand,               // C brand
-    params.model,               // D model
-    params.condition,           // E condition
-    params.year,                // F year
-    params.accessories,         // G accessories
-    params.strategy,            // H strategy
-    imageUrlsString,            // I imageUrls
-    imageCount,                 // J imageCount
-    params.buyPrice,            // K buyPrice
-    params.sellPrice,           // L sellPrice
-    params.profitRate,          // M profitRate (0〜1)
-    params.reason               // N reason
-  ];
-
-  // ========= 4. Sheets に append =========
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.SPREADSHEET_ID,
-    range: "Sheet1!A:N",
-    valueInputOption: "USER_ENTERED",
-    insertDataOption: "INSERT_ROWS",
-    requestBody: {
-      values: [row],
-    },
-  });
 }
+
