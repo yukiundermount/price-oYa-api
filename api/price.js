@@ -1,26 +1,8 @@
-import OpenAI from "openai";
-import { writeSheet } from "./writeSheet.js";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// ===== CORS =====
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-}
+import { google } from "googleapis";
 
 export default async function handler(req, res) {
-  setCors(res);
-
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-
   if (req.method !== "POST") {
-    return res.status(405).json({ status: "error", message: "Method not allowed" });
+    return res.status(405).end();
   }
 
   try {
@@ -32,103 +14,105 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      imageUrls = [], // ← Studio 側で URL 配列として渡す
-    } = req.body || {};
+      images = []
+    } = req.body;
 
-    const imageCount = Array.isArray(imageUrls) ? imageUrls.length : 0;
+    /** ========= Google Auth ========= */
+    const auth = new google.auth.JWT(
+      process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      undefined,
+      process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets"
+      ]
+    );
 
-    // ===== プロンプト =====
-    const systemPrompt = `
-あなたは日本の高級リユース市場（特に時計・ブランド品）専門の鑑定士AIです。
-必ず「現実の中古市場で成立する価格」を出してください。
-出力は **JSONのみ**。説明文・コードブロック禁止。
-`;
+    const drive = google.drive({ version: "v3", auth });
+    const sheets = google.sheets({ version: "v4", auth });
 
-    const userPrompt = `
-【商品情報】
-カテゴリ: ${category}
-ブランド: ${brand}
-モデル: ${model}
-状態: ${condition}
-年式: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
+    /** ========= Drive upload ========= */
+    const uploadedUrls: string[] = [];
 
-【販売戦略ルール】
-quick_sell:
-- 仕入価格は相場下限
-- 販売価格は相場中央値未満
+    for (let i = 0; i < images.length; i++) {
+      const buffer = Buffer.from(images[i], "base64");
 
-balance:
-- 仕入価格は相場中央値
-- 販売価格は相場中央値
-
-high_price:
-- 仕入価格は相場中央値〜上限
-- 販売価格は相場上限
-
-【画像】
-枚数: ${imageCount}
-${imageUrls.map((u, i) => `画像${i + 1}: ${u}`).join("\n")}
-
-【出力JSON】
-{
-  "buyPrice": number,
-  "sellPrice": number,
-  "profitRate": number, // 0〜1
-  "confidence": number, // 0〜1
-  "reason": string,
-  "warnings": string[]
-}
-`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.3,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    });
-
-    const content = completion.choices?.[0]?.message?.content || "{}";
-    const ai = JSON.parse(content);
-
-    // ===== Sheets（失敗してもレスポンスは返す）=====
-    try {
-      await writeSheet({
-        category,
-        brand,
-        model,
-        condition,
-        year,
-        accessories,
-        strategy,
-        imageUrls,
-        imageCount,
-        buyPrice: ai.buyPrice,
-        sellPrice: ai.sellPrice,
-        profitRate: ai.profitRate,
-        reason: ai.reason,
+      const file = await drive.files.create({
+        requestBody: {
+          name: `price-o-ya_${Date.now()}_${i + 1}.jpg`,
+          parents: [process.env.GOOGLE_DRIVE_FOLDER_ID]
+        },
+        media: {
+          mimeType: "image/jpeg",
+          body: buffer
+        }
       });
-    } catch (e) {
-      console.error("sheet write failed:", e);
+
+      const fileId = file.data.id;
+
+      // 誰でも閲覧可能にする
+      await drive.permissions.create({
+        fileId,
+        requestBody: {
+          role: "reader",
+          type: "anyone"
+        }
+      });
+
+      uploadedUrls.push(
+        `https://drive.google.com/file/d/${fileId}/view`
+      );
     }
 
+    /** ========= AI査定（例） ========= */
+    const price_buy = 1200000;
+    const price_sell = 1500000;
+    const profit_rate = (price_sell - price_buy) / price_buy;
+    const confidence = 0.9;
+
+    const reason =
+      "2015年製のロレックス デイトナは人気が高く、新品状態かつ付属品完備のため、相場中央値を下回る価格での販売が可能。";
+
+    /** ========= Sheets write ========= */
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: "Sheet1!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [
+          [
+            new Date().toISOString(),
+            category,
+            brand,
+            model,
+            condition,
+            year,
+            accessories,
+            strategy,
+            uploadedUrls.join(","),   // imageUrls
+            uploadedUrls.length,      // imageCount
+            price_buy,
+            price_sell,
+            profit_rate,
+            reason
+          ]
+        ]
+      }
+    });
+
+    /** ========= Response ========= */
     return res.status(200).json({
-      status: "ok",
       result: {
-        price_buy: ai.buyPrice,
-        price_sell: ai.sellPrice,
-        profit_margin: Math.round((ai.profitRate || 0) * 100),
-        confidence: Math.round((ai.confidence || 0) * 100),
-        reasoning: ai.reason,
-        warnings: ai.warnings || [],
-      },
+        price_buy,
+        price_sell,
+        profit_margin: profit_rate * 100,
+        confidence: confidence * 100,
+        reasoning: reason
+      }
     });
   } catch (err) {
-    console.error("price error:", err);
-    return res.status(500).json({ status: "error", message: "査定に失敗しました" });
+    console.error(err);
+    return res.status(500).json({ error: "server error" });
   }
 }
 
