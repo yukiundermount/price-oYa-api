@@ -4,6 +4,9 @@ export const config = {
   runtime: "nodejs",
 };
 
+/**
+ * Google Auth を安全に生成
+ */
 function getAuth() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY;
@@ -28,21 +31,33 @@ function getAuth() {
   });
 }
 
+/**
+ * API Handler
+ */
 export default async function handler(req, res) {
+  // ===== CORS =====
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
 
-  // CORS preflight
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
 
-  // ここで初めて GoogleAuth を生成
-  const auth = getAuth();
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
 
-  const drive = google.drive({ version: "v3", auth });
-  const sheets = google.sheets({ version: "v4", auth });
+  // ===== Google Auth 初期化（※ 今回は未使用だが接続確認のため残す）=====
+  getAuth();
 
-  // 動作確認用
-  return res.status(200).json({ ok: true });
+  // ===== STEP1：STUDIO表示確認用のダミー結果 =====
+  return res.status(200).json({
+    result: {
+      buyPrice: 1200000,
+      sellPrice: 1500000,
+      profitRate: 0.25,
+      reason: "テスト：2015年製ロレックス デイトナの参考相場より算出",
+    },
+  });
 }
