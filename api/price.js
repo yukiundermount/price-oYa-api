@@ -1,92 +1,77 @@
+// api/price.js
 import { google } from "googleapis";
 
-/**8
- * =========================
- * Google Sheets 設定
- * =========================
- */
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = "Sheet1";
-
 /**
- * サービスアカウント認証（ESM）
- */
-const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  },
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-
-const sheets = google.sheets({
-  version: "v4",
-  auth,
-});
-
-/**
- * =========================
- * API Handler
- * =========================
+ * Vercel Serverless Function
+ * POST /api/price
  */
 export default async function handler(req, res) {
-  // CORS（OPTIONS）
+  // CORS
   if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
+    return res.status(204).end();
   }
 
   if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
-    return;
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const body = req.body ?? {};
+    const {
+      category,
+      brand,
+      model,
+      condition,
+      year,
+      accessories,
+      strategy,
+      images = [],
+    } = req.body;
 
-    // 入力値
-    const category = body.category ?? "";
-    const brand = body.brand ?? "";
-    const model = body.model ?? "";
-    const condition = body.condition ?? "";
-    const year = body.year ?? "";
-    const accessories = body.accessories ?? "";
-    const strategy = body.strategy ?? "";
+    // ==========
+    // 仮の価格ロジック（今は安定動作優先）
+    // ==========
+    let buyPrice = 1200000;
+    let sellPrice = 1500000;
 
-    // 画像（base64は保存しない）
-    const images = Array.isArray(body.images) ? body.images : [];
-    const imageCount = images.length;
+    if (strategy === "balance") {
+      buyPrice = 1500000;
+      sellPrice = 1800000;
+    }
+    if (strategy === "high_price") {
+      buyPrice = 1500000;
+      sellPrice = 1900000;
+    }
+
+    const profitRate = Number(
+      ((sellPrice - buyPrice) / sellPrice).toFixed(2)
+    );
+
+    // ==========
+    // Google Sheets 書き込み
+    // ==========
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GCP_CLIENT_EMAIL,
+        private_key: process.env.GCP_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      },
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+
+    const sheets = google.sheets({ version: "v4", auth });
 
     const imageUrls =
-      imageCount > 0
+      images.length > 0
         ? images.map((_, i) => `uploaded_image_${i + 1}`).join(",")
         : "";
 
-    // ===== 査定ロジック（暫定）=====
-    const price_buy = 1200000;
-    const price_sell = 1500000;
-
-    const profitRate =
-      price_sell > 0
-        ? Number(((price_sell - price_buy) / price_sell).toFixed(4))
-        : 0;
-
-    const confidence = 0.9;
-
-    const reason =
-      "2015年製のロレックスデイトナは人気が高く、状態が新しいため、相場中央値を下回る価格での販売が可能。付属品が揃っている点も評価要素。";
-
-    // ===== Sheets 書き込み =====
-    const timestamp = new Date().toISOString();
-
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:N`,
+      spreadsheetId: process.env.SPREADSHEET_ID,
+      range: "Sheet1!A1",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
           [
-            timestamp,
+            new Date().toISOString(),
             category,
             brand,
             model,
@@ -95,30 +80,33 @@ export default async function handler(req, res) {
             accessories,
             strategy,
             imageUrls,
-            imageCount,
-            price_buy,
-            price_sell,
+            images.length,
+            buyPrice,
+            sellPrice,
             profitRate,
-            reason,
+            `${year}年製の${brand} ${model}は市場人気が高く、戦略「${strategy}」に基づく価格設定が妥当です。`,
           ],
         ],
       },
     });
 
-    // ===== フロント返却 =====
-    res.status(200).json({
+    // ==========
+    // レスポンス
+    // ==========
+    return res.status(200).json({
       result: {
-        price_buy,
-        price_sell,
-        profit_margin: profitRate,
-        confidence,
-        reasoning: reason,
+        price_buy: buyPrice,
+        price_sell: sellPrice,
+        profit_margin: profitRate * 100,
+        confidence: 90,
+        reasoning: `${year}年製の${brand} ${model}は需要が高く、現在の市場状況ではこの価格帯が現実的です。`,
       },
     });
   } catch (err) {
-    console.error("API ERROR:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error(err);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      message: err.message,
+    });
   }
 }
-
-
