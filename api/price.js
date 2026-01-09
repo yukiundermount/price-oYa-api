@@ -1,4 +1,4 @@
-const { google } = require("googleapis");
+import { google } from "googleapis";
 
 /**
  * =========================
@@ -9,7 +9,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = "Sheet1";
 
 /**
- * サービスアカウント認証
+ * サービスアカウント認証（ESM）
  */
 const auth = new google.auth.GoogleAuth({
   credentials: {
@@ -19,15 +19,18 @@ const auth = new google.auth.GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-const sheets = google.sheets({ version: "v4", auth });
+const sheets = google.sheets({
+  version: "v4",
+  auth,
+});
 
 /**
  * =========================
  * API Handler
  * =========================
  */
-module.exports = async function handler(req, res) {
-  // CORS（OPTIONS 対応）
+export default async function handler(req, res) {
+  // CORS（OPTIONS）
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
@@ -39,16 +42,16 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const body = req.body || {};
+    const body = req.body ?? {};
 
     // 入力値
-    const category = body.category || "";
-    const brand = body.brand || "";
-    const model = body.model || "";
-    const condition = body.condition || "";
-    const year = body.year || "";
-    const accessories = body.accessories || "";
-    const strategy = body.strategy || "";
+    const category = body.category ?? "";
+    const brand = body.brand ?? "";
+    const model = body.model ?? "";
+    const condition = body.condition ?? "";
+    const year = body.year ?? "";
+    const accessories = body.accessories ?? "";
+    const strategy = body.strategy ?? "";
 
     // 画像（base64は保存しない）
     const images = Array.isArray(body.images) ? body.images : [];
@@ -59,7 +62,7 @@ module.exports = async function handler(req, res) {
         ? images.map((_, i) => `uploaded_image_${i + 1}`).join(",")
         : "";
 
-    // ===== 査定ロジック（仮）=====
+    // ===== 査定ロジック（暫定）=====
     const price_buy = 1200000;
     const price_sell = 1500000;
 
@@ -71,7 +74,7 @@ module.exports = async function handler(req, res) {
     const confidence = 0.9;
 
     const reason =
-      "2015年製のロレックスデイトナは人気が高く、状態が新しいため、相場中央値を下回る価格での販売が可能。付属品が揃っていることも価値を高めている。";
+      "2015年製のロレックスデイトナは人気が高く、状態が新しいため、相場中央値を下回る価格での販売が可能。付属品が揃っている点も評価要素。";
 
     // ===== Sheets 書き込み =====
     const timestamp = new Date().toISOString();
@@ -116,5 +119,6 @@ module.exports = async function handler(req, res) {
     console.error("API ERROR:", err);
     res.status(500).json({ error: "Internal Server Error" });
   }
-};
+}
+
 
