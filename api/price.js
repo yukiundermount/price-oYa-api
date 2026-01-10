@@ -36,6 +36,7 @@ export default async function handler(req, res) {
   try {
     const auth = getAuth();
     const sheets = google.sheets({ version: "v4", auth });
+    const drive = google.drive({ version: "v3", auth });
 
     const body = req.body;
 
@@ -49,9 +50,46 @@ export default async function handler(req, res) {
         "2015年製ロレックス デイトナは国内外で需要が高く、付属品完備のため安定した価格で取引されています。",
     };
 
-    // ===== Sheets に書き込む1行 =====
+    // ===== 画像を Drive に保存 =====
+    const uploadedImageUrls: string[] = [];
+
+    if (Array.isArray(body.images)) {
+      for (let i = 0; i < body.images.length; i++) {
+        const buffer = Buffer.from(body.images[i], "base64");
+
+        const fileName = `price-o-ya_${Date.now()}_${i + 1}.jpg`;
+
+        const file = await drive.files.create({
+          requestBody: {
+            name: fileName,
+            parents: [process.env.DRIVE_FOLDER_ID!],
+          },
+          media: {
+            mimeType: "image/jpeg",
+            body: buffer,
+          },
+          fields: "id",
+        });
+
+        const fileId = file.data.id!;
+
+        // 公開URL化
+        await drive.permissions.create({
+          fileId,
+          requestBody: {
+            role: "reader",
+            type: "anyone",
+          },
+        });
+
+        const publicUrl = `https://drive.google.com/uc?id=${fileId}`;
+        uploadedImageUrls.push(publicUrl);
+      }
+    }
+
+    // ===== Sheets に書き込む =====
     const row = [
-      new Date().toISOString(),            // timestamp
+      new Date().toISOString(),
       body.category ?? "",
       body.brand ?? "",
       body.model ?? "",
@@ -59,11 +97,11 @@ export default async function handler(req, res) {
       body.year ?? "",
       body.accessories ?? "",
       body.strategy ?? "",
-      (body.imageUrls ?? []).join(","),    // imageUrls
-      body.imageCount ?? 0,
+      uploadedImageUrls.join(","), // ← 実URL
+      uploadedImageUrls.length,
       result.price_buy,
       result.price_sell,
-      result.profit_margin / 100,          // profitRate（0.25）
+      result.profit_margin / 100,
       result.reasoning,
     ];
 
@@ -79,9 +117,10 @@ export default async function handler(req, res) {
     // ===== STUDIO に返す =====
     return res.status(200).json({
       result,
+      images: uploadedImageUrls,
       saved: true,
     });
-  } catch (err) {
+  } catch (err: any) {
     console.error(err);
     return res.status(500).json({
       error: "Internal Server Error",
