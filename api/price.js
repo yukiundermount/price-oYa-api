@@ -40,7 +40,7 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
-    // ===== ダミー査定結果（後でAIに置換）=====
+    // ===== ダミー査定結果 =====
     const result = {
       price_buy: 1200000,
       price_sell: 1500000,
@@ -51,18 +51,17 @@ export default async function handler(req, res) {
     };
 
     // ===== 画像を Drive に保存 =====
-    const uploadedImageUrls: string[] = [];
+    const uploadedImageUrls = [];
 
     if (Array.isArray(body.images)) {
       for (let i = 0; i < body.images.length; i++) {
         const buffer = Buffer.from(body.images[i], "base64");
-
         const fileName = `price-o-ya_${Date.now()}_${i + 1}.jpg`;
 
         const file = await drive.files.create({
           requestBody: {
             name: fileName,
-            parents: [process.env.DRIVE_FOLDER_ID!],
+            parents: [process.env.DRIVE_FOLDER_ID],
           },
           media: {
             mimeType: "image/jpeg",
@@ -71,9 +70,8 @@ export default async function handler(req, res) {
           fields: "id",
         });
 
-        const fileId = file.data.id!;
+        const fileId = file.data.id;
 
-        // 公開URL化
         await drive.permissions.create({
           fileId,
           requestBody: {
@@ -82,22 +80,23 @@ export default async function handler(req, res) {
           },
         });
 
-        const publicUrl = `https://drive.google.com/uc?id=${fileId}`;
-        uploadedImageUrls.push(publicUrl);
+        uploadedImageUrls.push(
+          `https://drive.google.com/uc?id=${fileId}`
+        );
       }
     }
 
-    // ===== Sheets に書き込む =====
+    // ===== Sheets に書き込み =====
     const row = [
       new Date().toISOString(),
-      body.category ?? "",
-      body.brand ?? "",
-      body.model ?? "",
-      body.condition ?? "",
-      body.year ?? "",
-      body.accessories ?? "",
-      body.strategy ?? "",
-      uploadedImageUrls.join(","), // ← 実URL
+      body.category || "",
+      body.brand || "",
+      body.model || "",
+      body.condition || "",
+      body.year || "",
+      body.accessories || "",
+      body.strategy || "",
+      uploadedImageUrls.join(","),
       uploadedImageUrls.length,
       result.price_buy,
       result.price_sell,
@@ -114,13 +113,12 @@ export default async function handler(req, res) {
       },
     });
 
-    // ===== STUDIO に返す =====
     return res.status(200).json({
       result,
       images: uploadedImageUrls,
       saved: true,
     });
-  } catch (err: any) {
+  } catch (err) {
     console.error(err);
     return res.status(500).json({
       error: "Internal Server Error",
@@ -128,3 +126,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
