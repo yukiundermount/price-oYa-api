@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { Readable } from "stream";
 
 export const config = {
   runtime: "nodejs",
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
 
     const body = req.body;
 
-    // ===== ダミー査定結果 =====
+    // ===== 査定結果（仮）=====
     const result = {
       price_buy: 1200000,
       price_sell: 1500000,
@@ -50,12 +51,14 @@ export default async function handler(req, res) {
         "2015年製ロレックス デイトナは国内外で需要が高く、付属品完備のため安定した価格で取引されています。",
     };
 
-    // ===== 画像を Drive に保存 =====
+    // ===== Drive へ画像保存 =====
     const uploadedImageUrls = [];
 
     if (Array.isArray(body.images)) {
       for (let i = 0; i < body.images.length; i++) {
         const buffer = Buffer.from(body.images[i], "base64");
+        const stream = Readable.from(buffer);
+
         const fileName = `price-o-ya_${Date.now()}_${i + 1}.jpg`;
 
         const file = await drive.files.create({
@@ -65,7 +68,7 @@ export default async function handler(req, res) {
           },
           media: {
             mimeType: "image/jpeg",
-            body: buffer,
+            body: stream,
           },
           fields: "id",
         });
@@ -86,7 +89,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // ===== Sheets に書き込み =====
+    // ===== Sheets に保存 =====
     const row = [
       new Date().toISOString(),
       body.category || "",
@@ -108,9 +111,7 @@ export default async function handler(req, res) {
       spreadsheetId: process.env.SPREADSHEET_ID,
       range: "Sheet1!A:N",
       valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [row],
-      },
+      requestBody: { values: [row] },
     });
 
     return res.status(200).json({
@@ -126,4 +127,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
