@@ -24,7 +24,7 @@ function getAuth() {
 }
 
 export default async function handler(req, res) {
-  // CORS
+  // ===== CORS =====
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -32,31 +32,17 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
-  // GoogleAuth（接続確認。ここで落ちたらenv不備）
+  // Google Auth（接続確認）
   getAuth();
 
-  // ===== 必ず数値になる値（undefined回避）=====
-  const buyPrice = 1200000;
-  const sellPrice = 1500000;
-  const profitRate = 0.25;
-  const reason = "テスト：2015年製ロレックス デイトナの参考相場より算出";
+  // ===== ダミー査定結果（STUDIO完全一致）=====
+  const result = {
+    price_buy: 1200000,
+    price_sell: 1500000,
+    profit_margin: 25,   // ← % で返す（STUDIOでMath.roundしているため）
+    confidence: 92,      // ← 査定信頼度 %
+    reasoning: "2015年製ロレックス デイトナは国内外で需要が高く、付属品完備のため安定した価格で取引されています。"
+  };
 
-  // ===== STUDIOの取り出し方が不明なので “全部返す” =====
-  return res.status(200).json({
-    // パターンA: result配下
-    result: { buyPrice, sellPrice, profitRate, reason },
-
-    // パターンB: 直下
-    buyPrice,
-    sellPrice,
-    profitRate,
-    reason,
-
-    // パターンC: snake_case（念のため）
-    buy_price: buyPrice,
-    sell_price: sellPrice,
-    profit_rate: profitRate,
-
-    ok: true,
-  });
+  return res.status(200).json({ result });
 }
