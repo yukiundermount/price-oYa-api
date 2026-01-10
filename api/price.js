@@ -4,20 +4,12 @@ export const config = {
   runtime: "nodejs",
 };
 
-/**
- * Google Auth を安全に生成
- */
 function getAuth() {
   const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY;
 
-  if (!clientEmail) {
-    throw new Error("GOOGLE_CLIENT_EMAIL is not set");
-  }
-
-  if (!privateKey) {
-    throw new Error("GOOGLE_PRIVATE_KEY is not set");
-  }
+  if (!clientEmail) throw new Error("GOOGLE_CLIENT_EMAIL is not set");
+  if (!privateKey) throw new Error("GOOGLE_PRIVATE_KEY is not set");
 
   return new google.auth.GoogleAuth({
     credentials: {
@@ -31,33 +23,40 @@ function getAuth() {
   });
 }
 
-/**
- * API Handler
- */
 export default async function handler(req, res) {
-  // ===== CORS =====
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method Not Allowed" });
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
-  }
-
-  // ===== Google Auth 初期化（※ 今回は未使用だが接続確認のため残す）=====
+  // GoogleAuth（接続確認。ここで落ちたらenv不備）
   getAuth();
 
-  // ===== STEP1：STUDIO表示確認用のダミー結果 =====
+  // ===== 必ず数値になる値（undefined回避）=====
+  const buyPrice = 1200000;
+  const sellPrice = 1500000;
+  const profitRate = 0.25;
+  const reason = "テスト：2015年製ロレックス デイトナの参考相場より算出";
+
+  // ===== STUDIOの取り出し方が不明なので “全部返す” =====
   return res.status(200).json({
-    result: {
-      buyPrice: 1200000,
-      sellPrice: 1500000,
-      profitRate: 0.25,
-      reason: "テスト：2015年製ロレックス デイトナの参考相場より算出",
-    },
+    // パターンA: result配下
+    result: { buyPrice, sellPrice, profitRate, reason },
+
+    // パターンB: 直下
+    buyPrice,
+    sellPrice,
+    profitRate,
+    reason,
+
+    // パターンC: snake_case（念のため）
+    buy_price: buyPrice,
+    sell_price: sellPrice,
+    profit_rate: profitRate,
+
+    ok: true,
   });
 }
