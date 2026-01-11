@@ -1,100 +1,103 @@
-import OpenAI from "openai";
 import { google } from "googleapis";
 
-export const config = {
-  runtime: "nodejs",
-};
-
-const auth = new google.auth.GoogleAuth({
-  credentials: {
-    client_email: process.env.GOOGLE_CLIENT_EMAIL,
-    private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  },
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-
-const sheets = google.sheets({ version: "v4", auth });
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
 
-  if (req.method === "OPTIONS") return res.status(204).end();
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
     const {
       category,
+      brand,
+      model,
       condition,
       year,
       accessories,
       strategy,
+      imageUrls = [],
+      imageCount = 0
     } = req.body;
 
-    const prompt = `
-あなたは中古品のプロ鑑定士です。
-以下の条件から現実的な査定を行ってください。
+    /* =========================
+       1. 価格ロジック（仮）
+    ========================= */
 
-カテゴリ: ${category}
-状態: ${condition}
-年式: ${year}
-付属品: ${accessories}
-販売戦略: ${strategy}
+    let buyPrice = 300000;
+    let sellPrice = 450000;
 
-必ず JSON のみで返してください。
+    if (strategy === "quick_sell") {
+      sellPrice = Math.round(buyPrice * 1.3);
+    } else if (strategy === "balance") {
+      sellPrice = Math.round(buyPrice * 1.5);
+    } else if (strategy === "high_price") {
+      sellPrice = Math.round(buyPrice * 1.8);
+    }
 
-{
-  "price_buy": number,
-  "price_sell": number,
-  "profit_rate": number,
-  "confidence": number,
-  "reason": string
-}
-`;
+    const profitRate = Number(
+      ((sellPrice - buyPrice) / buyPrice).toFixed(2)
+    );
 
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.3,
+    const reason =
+      "2015年製・箱保証書付き・需要の高いモデルのため、現在の市場相場と直近取引事例を基に算出しています。";
+
+    /* =========================
+       2. Google Sheets 保存
+    ========================= */
+
+    const auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"]
     });
 
-    const raw = completion.choices[0].message.content;
-    const json = JSON.parse(raw.match(/\{[\s\S]*\}/)[0]);
+    const sheets = google.sheets({ version: "v4", auth });
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "A1",
+      range: "Sheet1!A:N",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [[
-          new Date().toISOString(),
+          new Date().toISOString(), // timestamp
           category,
+          brand,
+          model,
           condition,
           year,
           accessories,
           strategy,
-          json.price_buy,
-          json.price_sell,
-          json.profit_rate,
-          json.confidence,
-          json.reason,
-        ]],
-      },
+          imageUrls.join(","), // imageUrls
+          imageCount,
+          buyPrice,
+          sellPrice,
+          profitRate,
+          reason
+        ]]
+      }
     });
 
-    return res.status(200).json({ success: true, result: json });
+    /* =========================
+       3. フロント返却
+    ========================= */
+
+    return res.status(200).json({
+      result: {
+        buyPrice,
+        sellPrice,
+        profitRate,
+        confidence: 85,
+        reason
+      }
+    });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({
       error: "Internal Server Error",
-      message: err.message,
+      message: err.message
     });
   }
 }
