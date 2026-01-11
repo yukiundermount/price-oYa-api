@@ -12,7 +12,6 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -21,7 +20,7 @@ export default async function handler(req, res) {
     const {
       category,
       brand,
-      model,          // 商品モデル名
+      model,
       condition,
       year,
       accessories,
@@ -29,19 +28,24 @@ export default async function handler(req, res) {
       imageCount = 0,
     } = req.body;
 
-    /* ===============================
-       AI プロンプト（JSON強制）
-    =============================== */
-    const systemPrompt = `
+    const prompt = `
 あなたは中古品のプロ鑑定士です。
-必ず「純粋なJSONのみ」を返してください。
-文章・説明・装飾は禁止です。
-`;
+以下の情報から「必ずJSONのみ」で回答してください。
 
-    const userPrompt = `
-以下の商品を査定してください。
+出力形式:
+{
+  "buyPrice": number,
+  "sellPrice": number,
+  "profitRate": number,
+  "confidence": number,
+  "reason": string
+}
 
-【条件】
+条件:
+- 数値は整数
+- 文章は禁止（JSONのみ）
+
+商品:
 カテゴリ: ${category}
 ブランド: ${brand}
 モデル: ${model}
@@ -50,65 +54,22 @@ export default async function handler(req, res) {
 付属品: ${accessories}
 販売戦略: ${strategy}
 画像枚数: ${imageCount}
-
-【出力JSON形式】
-{
-  "buyPrice": number,
-  "sellPrice": number,
-  "profitRate": number,
-  "confidence": number,
-  "reason": string
-}
 `;
 
-    const aiModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
-
     const completion = await openai.chat.completions.create({
-      model: aiModel,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0,
     });
-
-    const raw = completion.choices[0].message.content;
 
     let result;
     try {
-      result = JSON.parse(raw);
-    } catch (e) {
-      console.error("AI raw response:", raw);
-      return res.status(500).json({
-        error: "AI pricing failed",
-        detail: "AI response is not valid JSON",
-      });
+      result = JSON.parse(completion.choices[0].message.content);
+    } catch {
+      throw new Error("AI response is not valid JSON");
     }
 
-    /* ===============================
-       必須キー検証
-    =============================== */
-    const requiredKeys = [
-      "buyPrice",
-      "sellPrice",
-      "profitRate",
-      "confidence",
-      "reason",
-    ];
-
-    for (const key of requiredKeys) {
-      if (!(key in result)) {
-        return res.status(500).json({
-          error: "AI pricing failed",
-          detail: `result.${key} is missing`,
-        });
-      }
-    }
-
-    /* ===============================
-       Sheets 書き込み
-    =============================== */
-    await writeSheet({
+    const payload = {
       category,
       brand,
       model,
@@ -117,25 +78,17 @@ export default async function handler(req, res) {
       accessories,
       strategy,
       imageCount,
-      buyPrice: result.buyPrice,
-      sellPrice: result.sellPrice,
-      profitRate: result.profitRate,
-      confidence: result.confidence,
-      reason: result.reason,
-    });
+      ...result,
+    };
 
-    /* ===============================
-       正常レスポンス
-    =============================== */
-    return res.status(200).json({
-      ok: true,
-      result,
-    });
+    await writeSheet(payload);
+
+    return res.status(200).json({ result });
 
   } catch (err) {
     console.error(err);
     return res.status(500).json({
-      error: "Internal Server Error",
+      error: "AI pricing failed",
       detail: err.message,
     });
   }
