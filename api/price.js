@@ -1,48 +1,42 @@
 import OpenAI from "openai";
 import { writeSheet } from "../lib/writeSheet.js";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-function setCors(res) {
-  const allowOrigin = process.env.ALLOW_ORIGIN || "*";
-  res.setHeader("Access-Control-Allow-Origin", allowOrigin);
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+function cors(res) {
+  const origin = process.env.ALLOW_ORIGIN || "*";
+  res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-function safeJsonParse(text) {
-  // 1) まずは素直に JSON.parse
+function toNumber(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(String(v).replace(/[, ]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function clampInt(n, min, max) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+// JSON抽出フォールバック（万一モデルが余計な文字を出しても救う）
+function extractJsonObject(text) {
+  if (!text) return null;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  const candidate = text.slice(start, end + 1);
   try {
-    return JSON.parse(text);
-  } catch (_) {}
-
-  // 2) 返答に前後の文字が混ざるケースに備えて、最初の { と最後の } を抜く
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    const sliced = text.slice(first, last + 1);
-    try {
-      return JSON.parse(sliced);
-    } catch (_) {}
+    return JSON.parse(candidate);
+  } catch {
+    return null;
   }
-
-  // 3) それでもダメならエラー
-  throw new Error("AI response is not valid JSON");
-}
-
-function normalizeBody(req) {
-  // Next/Vercel環境では req.body が object のことも string のこともあるため吸収
-  if (!req.body) return {};
-  if (typeof req.body === "string") {
-    return JSON.parse(req.body);
-  }
-  return req.body;
 }
 
 export default async function handler(req, res) {
-  setCors(res);
+  cors(res);
 
   if (req.method === "OPTIONS") {
     return res.status(204).end();
@@ -52,9 +46,131 @@ export default async function handler(req, res) {
   }
 
   try {
-    const body = normalizeBody(req);
+    // Vercelは通常JSONを自動でreq.bodyに入れてくれますが、念のため保険
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const {
+    // 入力（Studioから来る想定）
+    const category = body?.category ?? "";
+    const brand = body?.brand ?? "";
+    const model = body?.model ?? "";
+    const condition = body?.condition ?? "";
+    const year = body?.year ?? "";
+    const accessories = body?.accessories ?? "";
+    const strategy = body?.strategy ?? "";
+    const imageUrls = Array.isArray(body?.imageUrls) ? body.imageUrls : [];
+    const imageCount = clampInt(toNumber(body?.imageCount ?? imageUrls.length) ?? 0, 0, 3);
+
+    if (!category) {
+      return res.status(400).json({ error: "category is required" });
+    }
+
+    const systemPrompt = `
+あなたは「中古品の買取・販売価格」を推定する査定AIです。
+入力された商品情報から、以下のJSONだけを返してください（文章は不要）。
+
+【重要ルール】
+- 返答は必ずJSON（コードブロック禁止、前後に文字を付けない）
+- 数値はすべて整数（円）または小数（profitRate）
+- buyPrice < sellPrice を原則（例外時はreasonに注意書き）
+- profitRate は (sellPrice - buyPrice) / buyPrice （原価利益率）
+- reason は日本語で、根拠を短く明確に（相場・ブランド力・年式/状態・付属品・戦略・画像有無）
+- confidence は 0〜100 の整数
+
+【出力JSONスキーマ】
+{
+  "buyPrice": 120000,
+  "sellPrice": 150000,
+  "profitRate": 0.25,
+  "confidence": 85,
+  "reason": "..."
+}
+`.trim();
+
+    const userPrompt = `
+【商品情報】
+category: ${category}
+brand: ${brand}
+model: ${model}
+condition: ${condition}
+year: ${year}
+accessories: ${accessories}
+strategy: ${strategy}
+imageCount: ${imageCount}
+imageUrls: ${imageUrls.slice(0, 3).join(", ")}
+`.trim();
+
+    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+    // 可能なら「JSONスキーマ強制」を使って、必ずJSONだけ返させます
+    let parsed = null;
+    let rawText = "";
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "pricing",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                buyPrice: { type: "integer", minimum: 0 },
+                sellPrice: { type: "integer", minimum: 0 },
+                profitRate: { type: "number" },
+                confidence: { type: "integer", minimum: 0, maximum: 100 },
+                reason: { type: "string" },
+              },
+              required: ["buyPrice", "sellPrice", "profitRate", "confidence", "reason"],
+            },
+          },
+        },
+      });
+
+      rawText = completion?.choices?.[0]?.message?.content || "";
+      parsed = JSON.parse(rawText); // strictなので基本ここでOK
+    } catch (e) {
+      // response_format非対応モデル等の保険：JSONのみ返すように再要求
+      const completion2 = await openai.chat.completions.create({
+        model,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt + "\n\nJSONのみで返して。前後に一切の文字を付けない。" },
+        ],
+      });
+
+      rawText = completion2?.choices?.[0]?.message?.content || "";
+      parsed = extractJsonObject(rawText);
+    }
+
+    if (!parsed) {
+      return res.status(500).json({
+        error: "AI pricing failed",
+        detail: "AI response is not valid JSON",
+        raw: rawText?.slice(0, 500),
+      });
+    }
+
+    // 正規化
+    const buyPrice = clampInt(toNumber(parsed.buyPrice) ?? 0, 0, 999999999);
+    const sellPrice = clampInt(toNumber(parsed.sellPrice) ?? 0, 0, 999999999);
+
+    // profitRateは原価利益率で再計算（NaN防止）
+    const profitRate =
+      buyPrice > 0 ? Number(((sellPrice - buyPrice) / buyPrice).toFixed(4)) : 0;
+
+    const confidence = clampInt(toNumber(parsed.confidence) ?? 50, 0, 100);
+    const reason = String(parsed.reason ?? "").trim() || "根拠情報が不足しています。";
+
+    const result = {
       category,
       brand,
       model,
@@ -62,102 +178,8 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      imageUrls = [],
-      imageCount = 0,
-    } = body;
-
-    // 入力の最低限チェック
-    if (!category) {
-      return res.status(400).json({ error: "category is required" });
-    }
-
-    // 戦略の正規化（UI側の日本語/英語揺れを吸収）
-    const strategyNorm = (() => {
-      const s = (strategy || "").toString().trim();
-      if (s === "quick_sell" || s.includes("早") || s.includes("早く")) return "quick_sell";
-      if (s === "high_price" || s.includes("高") || s.includes("高く")) return "high_price";
-      return "balance";
-    })();
-
-    // 画像URLはシートに入れやすい形に（配列→文字列）
-    const imageUrlsStr = Array.isArray(imageUrls) ? imageUrls.join(",") : String(imageUrls || "");
-
-    const modelName = process.env.OPENAI_MODEL || "gpt-4.1-mini";
-
-    // ===== AIプロンプト（価格ロジックをAI判断）=====
-    const system = `
-あなたは中古品リセールのプロ査定士です。
-入力情報から「推奨販売価格（sellPrice）」と「買取目安価格（buyPrice）」を算出してください。
-
-必須要件:
-- 出力は「JSONのみ」。前後に一切の文章やコードフェンスを付けない。
-- 数値はすべて整数（円）。カンマ無し。
-- profitRate は (sellPrice - buyPrice) / buyPrice を小数で返す（例: 0.25）。
-- confidence は 0〜100 の整数。
-- reason は日本語で、判断根拠・前提・リスクを短く具体的に。
-- 画像が無い/少ない場合は confidence を下げ、reason に不確実性を明記。
-- strategy に応じて価格を調整:
-  - quick_sell: 売値を相場の下寄せ、買取も安全寄り（回転優先）
-  - balance: 標準
-  - high_price: 売値を上寄せ、ただし売れるまで時間が掛かる注意も書く
-`.trim();
-
-    const user = `
-【入力】
-category: ${category}
-brand: ${brand || ""}
-model: ${model || ""}
-condition: ${condition || ""}
-year: ${year || ""}
-accessories: ${accessories || ""}
-strategy: ${strategyNorm}
-imageCount: ${Number(imageCount) || 0}
-imageUrls: ${imageUrlsStr}
-
-【出力JSONの形（このキー名で固定）】
-{
-  "buyPrice": 0,
-  "sellPrice": 0,
-  "profitRate": 0,
-  "confidence": 0,
-  "reason": ""
-}
-`.trim();
-
-    // OpenAIへ。JSON “だけ”返す強制（可能な限り）
-    const ai = await openai.chat.completions.create({
-      model: modelName,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      // これが効く環境では JSON強制がかなり安定します（未対応でも無視されるだけ）
-      response_format: { type: "json_object" },
-    });
-
-    const content = ai?.choices?.[0]?.message?.content ?? "";
-    const parsed = safeJsonParse(content);
-
-    // 値の正規化（型崩れ対策）
-    const buyPrice = Math.max(0, Math.round(Number(parsed.buyPrice || 0)));
-    const sellPrice = Math.max(0, Math.round(Number(parsed.sellPrice || 0)));
-    const profitRate =
-      buyPrice > 0 ? Number(((sellPrice - buyPrice) / buyPrice).toFixed(4)) : 0;
-
-    const confidence = Math.max(0, Math.min(100, Math.round(Number(parsed.confidence || 0))));
-    const reason = (parsed.reason || "").toString();
-
-    const result = {
-      category,
-      brand: brand || "",
-      model: model || "",
-      condition: condition || "",
-      year: year || "",
-      accessories: accessories || "",
-      strategy: strategyNorm,
-      imageUrls: imageUrlsStr,
-      imageCount: Number(imageCount) || 0,
+      imageUrls,
+      imageCount,
       buyPrice,
       sellPrice,
       profitRate,
@@ -165,16 +187,33 @@ imageUrls: ${imageUrlsStr}
       reason,
     };
 
-    // シート追記（失敗してもAPI自体は返したいなら try/catch を分けるが、まずは原因を潰すためここは落とす）
-    await writeSheet(result);
+    // Sheetsへ書き込み（失敗してもAPIは結果を返す）
+    try {
+      await writeSheet({
+        category,
+        brand,
+        model,
+        condition,
+        year,
+        accessories,
+        strategy,
+        imageUrls,
+        imageCount,
+        buyPrice,
+        sellPrice,
+        profitRate,
+        reason,
+      });
+    } catch (sheetErr) {
+      console.error("writeSheet failed:", sheetErr);
+    }
 
-    return res.status(200).json(result);
+    // Studio側が欲しい形（resultが必須っぽいので必ず入れる）
+    return res.status(200).json({ result });
   } catch (err) {
-    const msg = err?.message ? String(err.message) : String(err);
-    return res.status(500).json({
-      error: "AI pricing failed",
-      detail: msg,
-    });
+    console.error(err);
+    return res.status(500).json({ error: "Server error", detail: String(err?.message ?? err) });
   }
 }
+
 
