@@ -1,129 +1,156 @@
+import type { VercelRequest, VercelResponse } from "vercel";
 import { google } from "googleapis";
-import { Readable } from "stream";
+import OpenAI from "openai";
 
 export const config = {
   runtime: "nodejs",
 };
 
-function getAuth() {
-  const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+/* =========================
+   Google Sheets 認証
+========================= */
+const auth = new google.auth.GoogleAuth({
+  credentials: {
+    client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  },
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
 
-  if (!clientEmail) throw new Error("GOOGLE_CLIENT_EMAIL is not set");
-  if (!privateKey) throw new Error("GOOGLE_PRIVATE_KEY is not set");
+const sheets = google.sheets({ version: "v4", auth });
 
-  return new google.auth.GoogleAuth({
-    credentials: {
-      client_email: clientEmail,
-      private_key: privateKey.replace(/\\n/g, "\n"),
-    },
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive",
-    ],
-  });
-}
+/* =========================
+   OpenAI
+========================= */
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
-export default async function handler(req, res) {
-  // ===== CORS =====
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+/* =========================
+   ハンドラ
+========================= */
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    return res.status(204).end();
+  }
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST")
-    return res.status(405).json({ error: "Method Not Allowed" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
-    const auth = getAuth();
-    const sheets = google.sheets({ version: "v4", auth });
-    const drive = google.drive({ version: "v3", auth });
+    const {
+      category,
+      brand,
+      model,
+      condition,
+      year,
+      accessories,
+      strategy,
+      images = [],
+      imageCount = 0,
+    } = req.body;
 
-    const body = req.body;
+    /* =========================
+       AIプロンプト（ここが本体）
+    ========================= */
+    const prompt = `
+あなたは日本の中古・新品リセール市場に精通したプロの査定AIです。
 
-    // ===== 査定結果（仮）=====
-    const result = {
-      price_buy: 1200000,
-      price_sell: 1500000,
-      profit_margin: 25,
-      confidence: 92,
-      reasoning:
-        "2015年製ロレックス デイトナは国内外で需要が高く、付属品完備のため安定した価格で取引されています。",
-    };
+【商品情報】
+カテゴリ: ${category}
+ブランド: ${brand}
+モデル: ${model}
+状態: ${condition}
+年式: ${year}
+付属品: ${accessories}
+販売戦略: ${strategy}
+画像枚数: ${imageCount}
 
-    // ===== Drive へ画像保存 =====
-    const uploadedImageUrls = [];
+【販売戦略の意味】
+- quick_sell: 早期売却を優先し、相場下限寄り
+- balance: 相場中央値を意識
+- high_price: 時間がかかっても高値狙い
 
-    if (Array.isArray(body.images)) {
-      for (let i = 0; i < body.images.length; i++) {
-        const buffer = Buffer.from(body.images[i], "base64");
-        const stream = Readable.from(buffer);
+【出力ルール】
+- 数値はすべて日本円
+- 市場相場・希少性・需要を考慮
+- 現実的な価格のみ出す
 
-        const fileName = `price-o-ya_${Date.now()}_${i + 1}.jpg`;
+【JSON形式で必ず出力】
+{
+  "price_buy": number,        // 買取目安価格
+  "price_sell": number,       // 推奨販売価格
+  "profit_margin": number,    // 利益率（%）
+  "confidence": number,       // 査定信頼度（0-100）
+  "reasoning": string         // 日本語での判断理由
+}
+`;
 
-        const file = await drive.files.create({
-          requestBody: {
-            name: fileName,
-            parents: [process.env.DRIVE_FOLDER_ID],
-          },
-          media: {
-            mimeType: "image/jpeg",
-            body: stream,
-          },
-          fields: "id",
-        });
-
-        const fileId = file.data.id;
-
-        await drive.permissions.create({
-          fileId,
-          requestBody: {
-            role: "reader",
-            type: "anyone",
-          },
-        });
-
-        uploadedImageUrls.push(
-          `https://drive.google.com/uc?id=${fileId}`
-        );
-      }
-    }
-
-    // ===== Sheets に保存 =====
-    const row = [
-      new Date().toISOString(),
-      body.category || "",
-      body.brand || "",
-      body.model || "",
-      body.condition || "",
-      body.year || "",
-      body.accessories || "",
-      body.strategy || "",
-      uploadedImageUrls.join(","),
-      uploadedImageUrls.length,
-      result.price_buy,
-      result.price_sell,
-      result.profit_margin / 100,
-      result.reasoning,
-    ];
-
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.SPREADSHEET_ID,
-      range: "Sheet1!A:N",
-      valueInputOption: "USER_ENTERED",
-      requestBody: { values: [row] },
+    /* =========================
+       OpenAI 呼び出し
+    ========================= */
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "あなたは中古品価格査定の専門家です。",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      temperature: 0.4,
     });
 
+    const text = completion.choices[0].message.content || "{}";
+    const result = JSON.parse(text);
+
+    /* =========================
+       Google Sheets 書き込み
+    ========================= */
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.SPREADSHEET_ID!,
+      range: "Sheet1!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [
+          [
+            new Date().toISOString(),
+            category,
+            brand,
+            model,
+            condition,
+            year,
+            accessories,
+            strategy,
+            imageCount,
+            result.price_buy,
+            result.price_sell,
+            result.profit_margin,
+            result.confidence,
+            result.reasoning,
+          ],
+        ],
+      },
+    });
+
+    /* =========================
+       レスポンス
+    ========================= */
     return res.status(200).json({
       result,
-      images: uploadedImageUrls,
-      saved: true,
     });
-  } catch (err) {
-    console.error(err);
+  } catch (error: any) {
+    console.error("API Error:", error);
     return res.status(500).json({
       error: "Internal Server Error",
-      message: err.message,
+      message: error.message,
     });
   }
 }
+
