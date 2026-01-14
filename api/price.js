@@ -1,14 +1,21 @@
 import OpenAI from "openai";
 import { writeSheet } from "../lib/writeSheet.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
     const {
@@ -22,8 +29,10 @@ export default async function handler(req, res) {
       imageUrls = [],
     } = req.body;
 
+    const imageCount = Array.isArray(imageUrls) ? imageUrls.length : 0;
+
     const prompt = `
-あなたは中古品の価格査定AIです。
+あなたは中古商品の価格査定AIです。
 
 【商品情報】
 カテゴリ: ${category}
@@ -33,13 +42,11 @@ export default async function handler(req, res) {
 年式: ${year}
 付属品: ${accessories}
 販売戦略: ${strategy}
+画像枚数: ${imageCount}
 
-【販売戦略ルール】
-quick_sell: 早く売れる価格
-balance: 相場バランス
-high_price: 高値狙い（時間がかかっても良い）
+【出力条件】
+必ず以下のJSON形式のみで出力してください。
 
-【出力形式（JSON厳守）】
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -55,20 +62,24 @@ high_price: 高値狙い（時間がかかっても良い）
       temperature: 0.4,
     });
 
-    const text = completion.choices?.[0]?.message?.content ?? "";
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("AI response is not valid JSON");
+    const text = completion.choices[0].message.content;
+    const result = JSON.parse(text);
+
+    const buyPrice = Number(result.buyPrice);
+    const sellPrice = Number(result.sellPrice);
+    const profitRate = Number(result.profitRate);
+    const confidence = Number(result.confidence);
+    const reason = result.reason ?? "";
+
+    if (
+      Number.isNaN(buyPrice) ||
+      Number.isNaN(sellPrice) ||
+      Number.isNaN(profitRate)
+    ) {
+      throw new Error("Invalid AI price output");
     }
 
-    const buyPrice = Number(parsed.buyPrice) || 0;
-    const sellPrice = Number(parsed.sellPrice) || 0;
-    const profitRate = Number(parsed.profitRate) || 0;
-    const confidence = Number(parsed.confidence) || 0;
-    const reason = String(parsed.reason || "");
-
+    // Sheets書き込み
     await writeSheet({
       category,
       brand,
@@ -77,8 +88,8 @@ high_price: 高値狙い（時間がかかっても良い）
       year,
       accessories,
       strategy,
-      imageUrls: Array.isArray(imageUrls) ? imageUrls.join(",") : "",
-      imageCount: Array.isArray(imageUrls) ? imageUrls.length : 0,
+      imageUrls: imageCount > 0 ? "uploaded_image" : "",
+      imageCount,
       buyPrice,
       sellPrice,
       profitRate,
@@ -86,12 +97,21 @@ high_price: 高値狙い（時間がかかっても良い）
       reason,
     });
 
+    // ★ Studioに必ず返す
     return res.status(200).json({
-      result: { buyPrice, sellPrice, profitRate, confidence, reason },
+      buyPrice,
+      sellPrice,
+      profitRate,
+      confidence,
+      reason,
     });
+
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "AI pricing failed", detail: err.message });
+    return res.status(500).json({
+      error: "AI査定に失敗しました",
+      detail: err.message,
+    });
   }
 }
 
