@@ -29,10 +29,8 @@ export default async function handler(req, res) {
       imageUrls = [],
     } = req.body;
 
-    const imageCount = Array.isArray(imageUrls) ? imageUrls.length : 0;
-
     const prompt = `
-あなたは中古商品の価格査定AIです。
+あなたは中古品の価格査定AIです。
 
 【商品情報】
 カテゴリ: ${category}
@@ -42,11 +40,9 @@ export default async function handler(req, res) {
 年式: ${year}
 付属品: ${accessories}
 販売戦略: ${strategy}
-画像枚数: ${imageCount}
+画像枚数: ${imageUrls.length}
 
-【出力条件】
-必ず以下のJSON形式のみで出力してください。
-
+【出力形式（JSONのみ）】
 {
   "buyPrice": number,
   "sellPrice": number,
@@ -59,27 +55,12 @@ export default async function handler(req, res) {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.4,
+      temperature: 0.3,
     });
 
-    const text = completion.choices[0].message.content;
-    const result = JSON.parse(text);
+    const aiResult = JSON.parse(completion.choices[0].message.content);
 
-    const buyPrice = Number(result.buyPrice);
-    const sellPrice = Number(result.sellPrice);
-    const profitRate = Number(result.profitRate);
-    const confidence = Number(result.confidence);
-    const reason = result.reason ?? "";
-
-    if (
-      Number.isNaN(buyPrice) ||
-      Number.isNaN(sellPrice) ||
-      Number.isNaN(profitRate)
-    ) {
-      throw new Error("Invalid AI price output");
-    }
-
-    // Sheets書き込み
+    // Sheets に保存
     await writeSheet({
       category,
       brand,
@@ -88,28 +69,29 @@ export default async function handler(req, res) {
       year,
       accessories,
       strategy,
-      imageUrls: imageCount > 0 ? "uploaded_image" : "",
-      imageCount,
-      buyPrice,
-      sellPrice,
-      profitRate,
-      confidence,
-      reason,
+      imageUrls: imageUrls.length > 0 ? "uploaded_image" : "",
+      imageCount: imageUrls.length,
+      buyPrice: aiResult.buyPrice,
+      sellPrice: aiResult.sellPrice,
+      profitRate: aiResult.profitRate,
+      confidence: aiResult.confidence,
+      reason: aiResult.reason,
     });
 
-    // ★ Studioに必ず返す
+    // ★ STUDIO が期待する形で返す
     return res.status(200).json({
-      buyPrice,
-      sellPrice,
-      profitRate,
-      confidence,
-      reason,
+      result: {
+        buyPrice: aiResult.buyPrice,
+        sellPrice: aiResult.sellPrice,
+        profitRate: aiResult.profitRate,
+        confidence: aiResult.confidence,
+        reason: aiResult.reason,
+      },
     });
-
   } catch (err) {
     console.error(err);
     return res.status(500).json({
-      error: "AI査定に失敗しました",
+      error: "price calculation failed",
       detail: err.message,
     });
   }
