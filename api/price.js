@@ -1,20 +1,14 @@
 import OpenAI from "openai";
-import { writeSheet } from "../lib/writeSheet";
+import { writeSheet } from "../lib/writeSheet.js";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
-  }
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method === "OPTIONS") return res.status(204).end();
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
     const {
@@ -61,20 +55,19 @@ high_price: 高値狙い（時間がかかっても良い）
       temperature: 0.4,
     });
 
-    const text = completion.choices[0].message.content;
-
-    let result;
+    const text = completion.choices?.[0]?.message?.content ?? "";
+    let parsed;
     try {
-      result = JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
       throw new Error("AI response is not valid JSON");
     }
 
-    const buyPrice = Number(result.buyPrice) || 0;
-    const sellPrice = Number(result.sellPrice) || 0;
-    const profitRate = Number(result.profitRate) || 0;
-    const confidence = Number(result.confidence) || 0;
-    const reason = String(result.reason || "");
+    const buyPrice = Number(parsed.buyPrice) || 0;
+    const sellPrice = Number(parsed.sellPrice) || 0;
+    const profitRate = Number(parsed.profitRate) || 0;
+    const confidence = Number(parsed.confidence) || 0;
+    const reason = String(parsed.reason || "");
 
     await writeSheet({
       category,
@@ -94,20 +87,11 @@ high_price: 高値狙い（時間がかかっても良い）
     });
 
     return res.status(200).json({
-      result: {
-        buyPrice,
-        sellPrice,
-        profitRate,
-        confidence,
-        reason,
-      },
+      result: { buyPrice, sellPrice, profitRate, confidence, reason },
     });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({
-      error: "AI pricing failed",
-      detail: err.message,
-    });
+    return res.status(500).json({ error: "AI pricing failed", detail: err.message });
   }
 }
 
