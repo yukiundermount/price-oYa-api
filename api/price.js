@@ -19,6 +19,7 @@ export default async function handler(req, res) {
 
   try {
     const {
+      email,             // ← ★追加
       category,
       brand,
       model,
@@ -62,6 +63,7 @@ export default async function handler(req, res) {
 
     // Sheets に保存
     await writeSheet({
+      email,             // ← ★追加
       category,
       brand,
       model,
